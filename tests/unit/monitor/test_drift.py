@@ -202,8 +202,8 @@ class TestPSICalculation:
         psi = drift_detector.calculate_psi("pace", sample_drifted_data)
 
         assert isinstance(psi, float)
-        # For shifted distribution, PSI should be significant
-        assert psi > 0.1  # At least moderate shift
+        # For heavily shifted distribution, PSI should exceed 0.2 threshold
+        assert psi > 0.2  # Significant shift per Phase 6 spec
 
     def test_psi_custom_bin_count(
         self,
@@ -299,6 +299,73 @@ class TestCheckDrift:
         assert "has_drift" in result_dict
         assert "features_drifted" in result_dict
         assert "details" in result_dict
+
+    def test_check_drift_empty_recent_data(
+        self,
+        drift_detector: DriftDetector,
+    ) -> None:
+        """check_drift should handle empty recent DataFrame gracefully."""
+        empty_df = pd.DataFrame()
+        result = drift_detector.check_drift(empty_df)
+
+        # Should return no drift with empty details when no features available
+        assert isinstance(result, DriftCheckResult)
+        assert result.has_drift is False
+        assert len(result.features_drifted) == 0
+
+    def test_check_drift_empty_feature_columns(
+        self,
+        drift_detector: DriftDetector,
+    ) -> None:
+        """check_drift should handle DataFrame with no matching features."""
+        unrelated_df = pd.DataFrame({
+            "unrelated_col": [1, 2, 3, 4, 5] * 10,
+            "another_col": [10, 20, 30, 40, 50] * 10,
+        })
+        result = drift_detector.check_drift(unrelated_df)
+
+        # Should return no drift with empty details
+        assert isinstance(result, DriftCheckResult)
+        assert result.has_drift is False
+        assert len(result.details) == 0
+
+
+class TestEmptyDataFrameHandling:
+    """Tests for empty DataFrame edge cases."""
+
+    def test_drift_detector_rejects_empty_reference(self) -> None:
+        """DriftDetector should reject empty reference DataFrame."""
+        empty_df = pd.DataFrame()
+        with pytest.raises(InsufficientDataError, match="at least 10 samples"):
+            DriftDetector(empty_df)
+
+    def test_drift_detector_rejects_insufficient_reference(self) -> None:
+        """DriftDetector should reject reference with insufficient rows."""
+        small_df = pd.DataFrame({"pace": list(range(5))})
+        with pytest.raises(InsufficientDataError, match="at least 10 samples"):
+            DriftDetector(small_df)
+
+    def test_ks_test_with_empty_recent_data(
+        self,
+        sample_reference_data: pd.DataFrame,
+    ) -> None:
+        """KS test should handle empty recent data appropriately."""
+        detector = DriftDetector(sample_reference_data)
+        empty_df = pd.DataFrame()
+
+        with pytest.raises(InsufficientDataError, match="not found in recent"):
+            detector.ks_test("pace", empty_df)
+
+    def test_psi_with_empty_recent_data(
+        self,
+        sample_reference_data: pd.DataFrame,
+    ) -> None:
+        """PSI calculation should handle empty recent data appropriately."""
+        detector = DriftDetector(sample_reference_data)
+        empty_df = pd.DataFrame()
+
+        with pytest.raises(InsufficientDataError, match="not found in recent"):
+            detector.calculate_psi("pace", empty_df)
 
 
 # =============================================================================

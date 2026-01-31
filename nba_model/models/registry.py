@@ -193,9 +193,10 @@ class ModelRegistry:
             logger.debug("Saved {} to {}", name, model_path)
 
         # Create metadata
+        now = datetime.now()
         metadata = ModelMetadata(
             version=version,
-            training_date=datetime.now(),
+            training_date=now,
             training_data_start=training_data_start or date.today(),
             training_data_end=training_data_end or date.today(),
             hyperparameters=config,
@@ -203,9 +204,10 @@ class ModelRegistry:
             git_commit=self._get_git_commit(),
         )
 
-        # Add parent version if provided
+        # Add parent version and created_at if provided
         metadata_dict = {
             "version": metadata.version,
+            "created_at": now.isoformat(),  # Phase 6 required field
             "training_date": metadata.training_date.isoformat(),
             "training_data_start": metadata.training_data_start.isoformat(),
             "training_data_end": metadata.training_data_end.isoformat(),

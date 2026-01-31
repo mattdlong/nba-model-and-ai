@@ -16,9 +16,10 @@
 
 ### Drift Detection Tests
 - KS test returns valid statistics for identical/shifted distributions
-- PSI calculation returns expected values
+- PSI calculation returns expected values (> 0.2 for heavy shifts)
 - check_drift aggregates results correctly
-- Edge case handling for empty/missing data
+- Empty dataframe handling tests
+- Missing feature column handling
 
 ### Trigger Tests
 - Each trigger type activates at correct thresholds
@@ -28,10 +29,19 @@
 
 ### Versioning Tests
 - Version string generation follows semantic versioning
-- Metadata correctly written and read
+- Metadata correctly written and read (includes created_at)
 - compare_versions uses correct metric priorities
 - Promote/rollback update status correctly
 - Lineage traverses parent chain
+- Version listing sorted by creation date descending
+
+## Integration Tests
+
+See `tests/integration/test_monitor_pipeline.py` for:
+- Drift pipeline end-to-end tests
+- Trigger pipeline integration tests
+- Version lifecycle tests
+- Complete monitoring cycle test
 
 ## Running Tests
 
@@ -44,4 +54,7 @@ pytest tests/unit/monitor/ --cov=nba_model.monitor
 
 # Run specific test file
 pytest tests/unit/monitor/test_drift.py -v
+
+# Run integration tests
+pytest tests/integration/test_monitor_pipeline.py -v
 ```

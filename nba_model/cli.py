@@ -2454,6 +2454,7 @@ def monitor_drift(
     """
     from datetime import datetime, timedelta
 
+    import pandas as pd
     from sqlalchemy.orm import Session
 
     from nba_model.data.db import get_engine
@@ -2482,53 +2483,122 @@ def monitor_drift(
             recent_start = today - timedelta(days=window_days)
             training_end = today - timedelta(days=window_days * 2)
 
-            # Query for reference and recent data
-            # Note: This is a simplified version - full implementation would
-            # aggregate features from games, stats, and RAPM tables
-
-            recent_games = (
-                session.query(Game)
-                .filter(Game.game_date >= recent_start)
-                .filter(Game.status == "completed")
-                .count()
-            )
-
-            ref_games = (
-                session.query(Game)
+            # Build reference data DataFrame from games before recent window
+            ref_query = (
+                session.query(
+                    GameStats.pace,
+                    GameStats.offensive_rating,
+                    GameStats.fg3a_rate,
+                    Game.game_date,
+                )
+                .join(Game, GameStats.game_id == Game.game_id)
                 .filter(Game.game_date < recent_start)
                 .filter(Game.game_date >= training_end)
                 .filter(Game.status == "completed")
-                .count()
             )
+            ref_records = [
+                {
+                    "pace": r.pace,
+                    "offensive_rating": r.offensive_rating,
+                    "fg3a_rate": r.fg3a_rate,
+                }
+                for r in ref_query
+                if r.pace is not None
+            ]
+            reference_df = pd.DataFrame(ref_records)
 
-            console.print(f"[dim]Reference games: {ref_games}[/dim]")
-            console.print(f"[dim]Recent games: {recent_games}[/dim]")
+            # Build recent data DataFrame from games in recent window
+            recent_query = (
+                session.query(
+                    GameStats.pace,
+                    GameStats.offensive_rating,
+                    GameStats.fg3a_rate,
+                    Game.game_date,
+                )
+                .join(Game, GameStats.game_id == Game.game_id)
+                .filter(Game.game_date >= recent_start)
+                .filter(Game.status == "completed")
+            )
+            recent_records = [
+                {
+                    "pace": r.pace,
+                    "offensive_rating": r.offensive_rating,
+                    "fg3a_rate": r.fg3a_rate,
+                }
+                for r in recent_query
+                if r.pace is not None
+            ]
+            recent_df = pd.DataFrame(recent_records)
 
-            if recent_games < 10 or ref_games < 10:
+            console.print(f"[dim]Reference samples: {len(reference_df)}[/dim]")
+            console.print(f"[dim]Recent samples: {len(recent_df)}[/dim]")
+
+            if len(reference_df) < 10 or len(recent_df) < 10:
                 console.print(
                     "[yellow]Insufficient data for drift detection. "
-                    "Need at least 10 games in each period.[/yellow]"
+                    "Need at least 10 samples in each period.[/yellow]"
                 )
                 raise typer.Exit(0)
 
-            # For now, show that we would check drift
-            # Full implementation would build feature DataFrames and run detection
-            console.print(
-                "\n[green]Drift detection infrastructure ready.[/green]\n"
-                "[dim]Run 'nba-model features build' to populate feature tables "
-                "for full drift analysis.[/dim]"
-            )
+            # Create drift detector and check for drift
+            try:
+                detector = DriftDetector(
+                    reference_data=reference_df,
+                    p_value_threshold=0.05,
+                    psi_threshold=0.2,
+                )
+                drift_result = detector.check_drift(recent_df, window_days=window_days)
+            except InsufficientDataError as e:
+                console.print(f"[yellow]Insufficient data: {e}[/yellow]")
+                raise typer.Exit(0) from e
 
-            # Create table showing what would be checked
-            table = Table(title="Monitored Features")
+            # Display results
+            table = Table(title="Drift Detection Results")
             table.add_column("Feature", style="cyan")
-            table.add_column("Status", style="green")
+            table.add_column("KS Stat", justify="right")
+            table.add_column("P-Value", justify="right")
+            table.add_column("PSI", justify="right")
+            table.add_column("Status", style="bold")
 
-            for feature in MONITORED_FEATURES:
-                table.add_row(feature, "Ready for monitoring")
+            for feature, detail in drift_result.details.items():
+                status = (
+                    "[red]DRIFTED[/red]"
+                    if detail.is_drifted
+                    else "[green]OK[/green]"
+                )
+                table.add_row(
+                    feature,
+                    f"{detail.ks_stat:.4f}",
+                    f"{detail.p_value:.4f}",
+                    f"{detail.psi:.4f}",
+                    status,
+                )
 
             console.print(table)
 
+            # Exit with code 1 if drift detected
+            if drift_result.has_drift:
+                console.print(
+                    Panel(
+                        f"[bold red]Drift detected in {len(drift_result.features_drifted)} "
+                        f"feature(s):[/bold red]\n"
+                        f"{', '.join(drift_result.features_drifted)}",
+                        title="Drift Alert",
+                        border_style="red",
+                    )
+                )
+                raise typer.Exit(1)
+            else:
+                console.print(
+                    Panel(
+                        "[green]No drift detected[/green]",
+                        title="Drift Status",
+                        border_style="green",
+                    )
+                )
+
+    except typer.Exit:
+        raise
     except Exception as e:
         console.print(f"[red]Error during drift check: {e}[/red]")
         logger.exception("Drift check failed")
@@ -2555,8 +2625,14 @@ def monitor_trigger(
 
     Outputs recommendation and priority level.
     """
-    from datetime import timedelta
+    from datetime import date, timedelta
 
+    import pandas as pd
+    from sqlalchemy.orm import Session
+
+    from nba_model.data.db import get_engine
+    from nba_model.data.models import Game, GameStats
+    from nba_model.monitor.drift import DriftDetector, InsufficientDataError
     from nba_model.monitor.triggers import RetrainingTrigger, TriggerContext
 
     settings = get_settings()
@@ -2566,8 +2642,6 @@ def monitor_trigger(
     try:
         # Determine last training date
         if last_train_days > 0:
-            from datetime import date
-
             last_train_date = date.today() - timedelta(days=last_train_days)
         else:
             # Try to get from model metadata
@@ -2581,12 +2655,91 @@ def monitor_trigger(
                     f"[dim]Last training: {last_train_date}[/dim]"
                 )
             else:
-                from datetime import date
-
                 last_train_date = date.today()
                 console.print(
                     "[yellow]No model found, using today as last train date[/yellow]"
                 )
+
+        # Calculate days since training
+        days_since_training = (date.today() - last_train_date).days
+
+        # Query database for games since training and build drift data
+        games_since_training = 0
+        drift_detector = None
+        recent_data = None
+
+        try:
+            engine = get_engine()
+            with Session(engine) as session:
+                # Count games since training
+                games_since_training = (
+                    session.query(Game)
+                    .filter(Game.game_date > last_train_date)
+                    .filter(Game.status == "completed")
+                    .count()
+                )
+
+                # Build reference data (training period - 60 days before training)
+                ref_start = last_train_date - timedelta(days=60)
+                ref_query = (
+                    session.query(
+                        GameStats.pace,
+                        GameStats.offensive_rating,
+                        GameStats.fg3a_rate,
+                    )
+                    .join(Game, GameStats.game_id == Game.game_id)
+                    .filter(Game.game_date >= ref_start)
+                    .filter(Game.game_date <= last_train_date)
+                    .filter(Game.status == "completed")
+                )
+                ref_records = [
+                    {
+                        "pace": r.pace,
+                        "offensive_rating": r.offensive_rating,
+                        "fg3a_rate": r.fg3a_rate,
+                    }
+                    for r in ref_query
+                    if r.pace is not None
+                ]
+                reference_df = pd.DataFrame(ref_records)
+
+                # Build recent data (since training)
+                recent_query = (
+                    session.query(
+                        GameStats.pace,
+                        GameStats.offensive_rating,
+                        GameStats.fg3a_rate,
+                    )
+                    .join(Game, GameStats.game_id == Game.game_id)
+                    .filter(Game.game_date > last_train_date)
+                    .filter(Game.status == "completed")
+                )
+                recent_records = [
+                    {
+                        "pace": r.pace,
+                        "offensive_rating": r.offensive_rating,
+                        "fg3a_rate": r.fg3a_rate,
+                    }
+                    for r in recent_query
+                    if r.pace is not None
+                ]
+                recent_data = pd.DataFrame(recent_records)
+
+                # Create drift detector if sufficient data
+                if len(reference_df) >= 10:
+                    try:
+                        drift_detector = DriftDetector(
+                            reference_data=reference_df,
+                            p_value_threshold=0.05,
+                            psi_threshold=0.2,
+                        )
+                    except InsufficientDataError:
+                        drift_detector = None
+
+                console.print(f"[dim]Games since training: {games_since_training}[/dim]")
+
+        except Exception as e:
+            logger.warning("Could not query database for trigger context: {}", e)
 
         # Create trigger evaluator
         trigger = RetrainingTrigger(
@@ -2596,13 +2749,13 @@ def monitor_trigger(
             accuracy_threshold=0.48,
         )
 
-        # Create context (simplified - full version would load actual data)
+        # Create context with real data
         context = TriggerContext(
             last_train_date=last_train_date,
-            drift_detector=None,  # Would need reference data
-            recent_data=None,
-            recent_bets=[],  # Would load from backtest results
-            games_since_training=0,  # Would query database
+            drift_detector=drift_detector,
+            recent_data=recent_data if recent_data is not None and len(recent_data) >= 10 else None,
+            recent_bets=[],  # Would load from backtest results if available
+            games_since_training=games_since_training,
         )
 
         # Evaluate triggers
@@ -2617,10 +2770,12 @@ def monitor_trigger(
         for trigger_name, is_active in result.trigger_details.items():
             status = "[green]Active[/green]" if is_active else "[dim]Inactive[/dim]"
             desc = {
-                "scheduled": f"{(last_train_date - last_train_date).days} days since training",
-                "drift": "Feature distribution check",
-                "performance": "ROI and accuracy check",
-                "data": "New games available",
+                "scheduled": f"{days_since_training} days since training",
+                "drift": "Feature distribution check" + (
+                    " (no data)" if drift_detector is None else ""
+                ),
+                "performance": "ROI and accuracy check (no bet history)",
+                "data": f"{games_since_training} new games available",
             }.get(trigger_name, "")
             table.add_row(trigger_name.capitalize(), status, desc)
 

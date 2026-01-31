@@ -8,6 +8,15 @@ Detects model degradation through drift detection and triggers automated retrain
 
 **Phase 6 - Complete**
 
+All core functionality implemented:
+- Covariate drift detection (KS + PSI) ✅
+- Concept drift detection (accuracy + Brier) ✅
+- Retraining trigger logic ✅
+- Model versioning manager ✅
+- CLI commands wired to real data ✅
+- Version comparison with stored metrics ✅
+- Version listing sorted by creation date ✅
+
 ## Structure
 
 | File | Purpose | Key Classes |

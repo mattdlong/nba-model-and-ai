@@ -10,7 +10,10 @@ Cross-module tests that verify multiple components work together correctly. Test
 |------|---------|
 | `__init__.py` | Package marker |
 | `test_data_pipeline.py` | Data collection flow (Phase 2) |
+| `test_feature_pipeline.py` | Feature engineering flow (Phase 3) |
 | `test_training_pipeline.py` | Model training flow (Phase 4) |
+| `test_backtest_pipeline.py` | Backtesting flow (Phase 5) |
+| `test_monitor_pipeline.py` | Monitoring flow (Phase 6) |
 | `test_prediction_pipeline.py` | Inference flow (Phase 7) |
 
 ## Patterns
