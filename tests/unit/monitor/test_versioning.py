@@ -280,6 +280,79 @@ class TestCompareVersions:
         assert result.version_a_metrics["accuracy"] == 0.55
         assert result.version_b_metrics["accuracy"] == 0.60
 
+    def test_computes_live_metrics_with_test_data(
+        self,
+        version_manager: ModelVersionManager,
+        sample_models: dict[str, nn.Module],
+        sample_config: dict[str, int],
+    ) -> None:
+        """compare_versions should compute metrics from test_data with win_prob."""
+        import pandas as pd
+
+        # Create two versions
+        version_manager.create_version(
+            models=sample_models,
+            config=sample_config,
+            metrics={"accuracy": 0.55, "brier_score": 0.25},
+        )
+
+        version_manager.create_version(
+            models=sample_models,
+            config=sample_config,
+            metrics={"accuracy": 0.60, "brier_score": 0.20},
+            parent_version="1.0.0",
+        )
+
+        # Create test data with pre-computed predictions (win_prob)
+        # Version A: 60% accuracy (6/10 correct)
+        # Version B: 80% accuracy (8/10 correct)
+        test_data = pd.DataFrame({
+            "home_win": [1, 1, 1, 0, 0, 1, 0, 1, 0, 0],
+            "win_prob": [0.7, 0.8, 0.6, 0.3, 0.4, 0.6, 0.3, 0.7, 0.4, 0.2],
+        })
+
+        # Compare with test_data - should compute live metrics
+        result = version_manager.compare_versions("1.0.0", "1.1.0", test_data=test_data)
+
+        # Both versions should have the same computed metrics since they use same test_data
+        # The predictions are: [1,1,1,0,0,1,0,1,0,0] (threshold 0.5)
+        # Actuals are:         [1,1,1,0,0,1,0,1,0,0]
+        # All 10 predictions are correct -> accuracy = 1.0
+        assert result.version_a_metrics["accuracy"] == 1.0
+        assert result.version_b_metrics["accuracy"] == 1.0
+        assert "brier_score" in result.version_a_metrics
+
+    def test_handles_empty_test_data(
+        self,
+        version_manager: ModelVersionManager,
+        sample_models: dict[str, nn.Module],
+        sample_config: dict[str, int],
+    ) -> None:
+        """compare_versions should fall back to stored metrics for empty test_data."""
+        import pandas as pd
+
+        version_manager.create_version(
+            models=sample_models,
+            config=sample_config,
+            metrics={"accuracy": 0.55, "brier_score": 0.25},
+        )
+
+        version_manager.create_version(
+            models=sample_models,
+            config=sample_config,
+            metrics={"accuracy": 0.60, "brier_score": 0.20},
+            parent_version="1.0.0",
+        )
+
+        # Empty test data should fall back to stored metrics
+        test_data = pd.DataFrame({"home_win": [], "win_prob": []})
+
+        result = version_manager.compare_versions("1.0.0", "1.1.0", test_data=test_data)
+
+        # Should use stored metrics for empty data
+        assert result.version_a_metrics["accuracy"] == 0.55
+        assert result.version_b_metrics["accuracy"] == 0.60
+
     def test_determines_winner_by_accuracy(
         self,
         version_manager: ModelVersionManager,

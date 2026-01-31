@@ -2477,30 +2477,55 @@ def monitor_drift(
 
     try:
         engine = get_engine()
-        with Session(engine) as session:
-            # Calculate date range
-            today = datetime.now().date()
-            recent_start = today - timedelta(days=window_days)
-            training_end = today - timedelta(days=window_days * 2)
 
-            # Build reference data DataFrame from games before recent window
+        # Try to get reference period from model training metadata (per phase6.md spec)
+        from nba_model.models.registry import ModelRegistry
+
+        registry = ModelRegistry()
+        metadata = registry.load_metadata("latest")
+
+        today = datetime.now().date()
+
+        if metadata is not None:
+            # Use training period as reference window per phase6.md
+            training_start = metadata.training_data_start
+            training_end = metadata.training_data_end
+            console.print(
+                f"[dim]Reference period: {training_start} to {training_end} (from training)[/dim]"
+            )
+        else:
+            # Fallback: use recent window + prior window heuristic
+            recent_start = today - timedelta(days=window_days)
+            training_start = today - timedelta(days=window_days * 2)
+            training_end = recent_start - timedelta(days=1)
+            console.print(
+                f"[dim]No model metadata, using fallback reference: "
+                f"{training_start} to {training_end}[/dim]"
+            )
+
+        # Recent window is always the last N days
+        recent_start = today - timedelta(days=window_days)
+
+        with Session(engine) as session:
+            # Build reference data DataFrame from training period
+            # Note: Only pace and offensive_rating are directly available in GameStats.
+            # TODO: Wire rest_days, travel_distance, rapm_mean, fg3a_rate when
+            # feature computation pipeline is integrated (requires Phase 7+).
             ref_query = (
                 session.query(
                     GameStats.pace,
                     GameStats.offensive_rating,
-                    GameStats.fg3a_rate,
                     Game.game_date,
                 )
                 .join(Game, GameStats.game_id == Game.game_id)
-                .filter(Game.game_date < recent_start)
-                .filter(Game.game_date >= training_end)
+                .filter(Game.game_date >= training_start)
+                .filter(Game.game_date <= training_end)
                 .filter(Game.status == "completed")
             )
             ref_records = [
                 {
                     "pace": r.pace,
                     "offensive_rating": r.offensive_rating,
-                    "fg3a_rate": r.fg3a_rate,
                 }
                 for r in ref_query
                 if r.pace is not None
@@ -2512,7 +2537,6 @@ def monitor_drift(
                 session.query(
                     GameStats.pace,
                     GameStats.offensive_rating,
-                    GameStats.fg3a_rate,
                     Game.game_date,
                 )
                 .join(Game, GameStats.game_id == Game.game_id)
@@ -2523,7 +2547,6 @@ def monitor_drift(
                 {
                     "pace": r.pace,
                     "offensive_rating": r.offensive_rating,
-                    "fg3a_rate": r.fg3a_rate,
                 }
                 for r in recent_query
                 if r.pace is not None
@@ -2680,12 +2703,14 @@ def monitor_trigger(
                 )
 
                 # Build reference data (training period - 60 days before training)
+                # Note: Only pace and offensive_rating are directly available in GameStats.
+                # TODO: Wire rest_days, travel_distance, rapm_mean, fg3a_rate when
+                # feature computation pipeline is integrated (requires Phase 7+).
                 ref_start = last_train_date - timedelta(days=60)
                 ref_query = (
                     session.query(
                         GameStats.pace,
                         GameStats.offensive_rating,
-                        GameStats.fg3a_rate,
                     )
                     .join(Game, GameStats.game_id == Game.game_id)
                     .filter(Game.game_date >= ref_start)
@@ -2696,7 +2721,6 @@ def monitor_trigger(
                     {
                         "pace": r.pace,
                         "offensive_rating": r.offensive_rating,
-                        "fg3a_rate": r.fg3a_rate,
                     }
                     for r in ref_query
                     if r.pace is not None
@@ -2708,7 +2732,6 @@ def monitor_trigger(
                     session.query(
                         GameStats.pace,
                         GameStats.offensive_rating,
-                        GameStats.fg3a_rate,
                     )
                     .join(Game, GameStats.game_id == Game.game_id)
                     .filter(Game.game_date > last_train_date)
@@ -2718,7 +2741,6 @@ def monitor_trigger(
                     {
                         "pace": r.pace,
                         "offensive_rating": r.offensive_rating,
-                        "fg3a_rate": r.fg3a_rate,
                     }
                     for r in recent_query
                     if r.pace is not None
@@ -2750,11 +2772,14 @@ def monitor_trigger(
         )
 
         # Create context with real data
+        # TODO: Wire bet history from backtest results when available (Phase 7/8).
+        # Currently, performance trigger cannot activate because recent_bets is empty.
+        # This is a known limitation documented in nba_model/monitor/CLAUDE.md.
         context = TriggerContext(
             last_train_date=last_train_date,
             drift_detector=drift_detector,
             recent_data=recent_data if recent_data is not None and len(recent_data) >= 10 else None,
-            recent_bets=[],  # Would load from backtest results if available
+            recent_bets=[],  # Bet history not yet available - requires Phase 7+ pipeline
             games_since_training=games_since_training,
         )
 

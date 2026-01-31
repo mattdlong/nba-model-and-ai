@@ -31,6 +31,8 @@
 - Version string generation follows semantic versioning
 - Metadata correctly written and read (includes created_at)
 - compare_versions uses correct metric priorities
+- compare_versions with live inference on test_data (win_prob column)
+- compare_versions handles empty test_data gracefully
 - Promote/rollback update status correctly
 - Lineage traverses parent chain
 - Version listing sorted by creation date descending

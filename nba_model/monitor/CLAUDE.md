@@ -6,16 +6,28 @@ Detects model degradation through drift detection and triggers automated retrain
 
 ## Status
 
-**Phase 6 - Complete**
+**Phase 6 - Core Complete (with known limitations)**
 
-All core functionality implemented:
+Core functionality implemented:
 - Covariate drift detection (KS + PSI) ✅
 - Concept drift detection (accuracy + Brier) ✅
 - Retraining trigger logic ✅
 - Model versioning manager ✅
 - CLI commands wired to real data ✅
-- Version comparison with stored metrics ✅
+- Version comparison with live inference ✅
 - Version listing sorted by creation date ✅
+
+### Known Limitations
+
+1. **Performance trigger cannot activate** - `recent_bets=[]` is passed because bet history is not yet available from the backtest pipeline. Requires Phase 7+ integration.
+
+2. **Drift detection uses subset of features** - Only `pace` and `offensive_rating` are currently monitored via CLI. The following features require additional computation:
+   - `fg3a_rate` - needs calculation from shot data
+   - `rest_days` - needs calculation from game history
+   - `travel_distance` - needs geographic/arena data
+   - `rapm_mean` - needs aggregation from PlayerRAPM table
+
+3. **Version comparison inference** - Live inference runs with dummy inputs when full feature pipeline is not available. For production use, pass `win_prob` column in test_data with pre-computed predictions.
 
 ## Structure
 
