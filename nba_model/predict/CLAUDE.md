@@ -26,7 +26,7 @@ Today's Games → InferencePipeline.predict_today()
                       │
                       ├─→ Build context features (32-dim)
                       │
-                      ├─→ Get Transformer output (play-by-play)
+                      ├─→ Get Transformer output (zeros for pre-game)
                       │
                       ├─→ Get GNN output (lineup graph)
                       │

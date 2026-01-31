@@ -23,11 +23,11 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, TypedDict
 
+import pandas as pd
 import torch
 
-from nba_model.config import get_settings
 from nba_model.logging import get_logger
 from nba_model.types import GameId, TeamId
 
@@ -35,6 +35,43 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from nba_model.models.registry import ModelRegistry
+
+
+class GameInfoDict(TypedDict):
+    """Type for game info dictionary."""
+
+    game_date: date
+    home_team: str
+    away_team: str
+    home_team_id: int
+    away_team_id: int
+
+
+class ContextFeatureBuilderProtocol(Protocol):
+    """Protocol for context feature builder dependency injection."""
+
+    def build(self, game_id: GameId, db_session: Session) -> torch.Tensor: ...
+
+
+class InjuryAdjusterProtocol(Protocol):
+    """Protocol for injury adjuster dependency injection."""
+
+    def adjust_prediction_values(
+        self,
+        game_id: GameId,
+        base_home_win_prob: float,
+        base_margin: float,
+        base_total: float,
+    ) -> dict: ...
+
+
+class LineupGraphBuilderProtocol(Protocol):
+    """Protocol for lineup graph builder dependency injection."""
+
+    def build_graph(
+        self, home_lineup: list[int], away_lineup: list[int]
+    ) -> torch.Tensor: ...
+
 
 logger = get_logger(__name__)
 
@@ -192,6 +229,8 @@ class InferencePipeline:
         db_session: Session,
         model_version: str = "latest",
         device: torch.device | None = None,
+        context_feature_builder: ContextFeatureBuilderProtocol | None = None,
+        injury_adjuster: InjuryAdjusterProtocol | None = None,
     ) -> None:
         """Initialize InferencePipeline.
 
@@ -200,6 +239,10 @@ class InferencePipeline:
             db_session: SQLAlchemy database session.
             model_version: Model version to load ("latest" or specific version).
             device: Device for inference. If None, auto-detects.
+            context_feature_builder: Optional injected ContextFeatureBuilder.
+                If None, creates a default instance.
+            injury_adjuster: Optional injected InjuryAdjuster.
+                If None, creates a default instance.
         """
         self.registry = model_registry
         self.db_session = db_session
@@ -209,6 +252,10 @@ class InferencePipeline:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = device
+
+        # Store injected dependencies (lazy-load defaults if None)
+        self._context_feature_builder = context_feature_builder
+        self._injury_adjuster = injury_adjuster
 
         # Lazy-load models
         self._models_loaded = False
@@ -336,10 +383,8 @@ class InferencePipeline:
 
         # Apply injury adjustment if requested
         if apply_injury_adjustment:
-            from nba_model.predict.injuries import InjuryAdjuster
-
             try:
-                adjuster = InjuryAdjuster(self.db_session)
+                adjuster = self._get_injury_adjuster()
                 adjustment = adjuster.adjust_prediction_values(
                     game_id=game_id,
                     base_home_win_prob=home_win_prob,
@@ -406,7 +451,9 @@ class InferencePipeline:
             logger.info("No games found for {}", target_date)
             return []
 
-        logger.info("Generating predictions for {} games on {}", len(game_ids), target_date)
+        logger.info(
+            "Generating predictions for {} games on {}", len(game_ids), target_date
+        )
 
         predictions = []
         for game_id in game_ids:
@@ -425,15 +472,11 @@ class InferencePipeline:
 
         return predictions
 
-    def _get_game_info(self, game_id: GameId) -> dict:
+    def _get_game_info(self, game_id: GameId) -> GameInfoDict:
         """Get basic game information from database."""
         from nba_model.data.models import Game, Team
 
-        game = (
-            self.db_session.query(Game)
-            .filter(Game.game_id == game_id)
-            .first()
-        )
+        game = self.db_session.query(Game).filter(Game.game_id == game_id).first()
 
         if game is None:
             raise GameNotFoundError(f"Game {game_id} not found")
@@ -470,11 +513,25 @@ class InferencePipeline:
 
         return [g[0] for g in games]
 
+    def _get_context_feature_builder(self) -> ContextFeatureBuilderProtocol:
+        """Get or create the context feature builder."""
+        if self._context_feature_builder is None:
+            from nba_model.models.fusion import ContextFeatureBuilder
+
+            self._context_feature_builder = ContextFeatureBuilder()
+        return self._context_feature_builder
+
+    def _get_injury_adjuster(self) -> InjuryAdjusterProtocol:
+        """Get or create the injury adjuster."""
+        if self._injury_adjuster is None:
+            from nba_model.predict.injuries import InjuryAdjuster
+
+            self._injury_adjuster = InjuryAdjuster(self.db_session)
+        return self._injury_adjuster
+
     def _build_context_features(self, game_id: GameId) -> torch.Tensor:
         """Build context feature vector for Tower A."""
-        from nba_model.models.fusion import ContextFeatureBuilder
-
-        builder = ContextFeatureBuilder()
+        builder = self._get_context_feature_builder()
         features = builder.build(game_id, self.db_session)
         return features
 
@@ -554,11 +611,7 @@ class InferencePipeline:
         from nba_model.data.models import Game, Stint
 
         # Get game info
-        game = (
-            self.db_session.query(Game)
-            .filter(Game.game_id == game_id)
-            .first()
-        )
+        game = self.db_session.query(Game).filter(Game.game_id == game_id).first()
 
         if game is None:
             return [], []
@@ -588,8 +641,6 @@ class InferencePipeline:
                 pass
 
         # Fallback: use most recent game's lineup for each team
-        from sqlalchemy import or_
-
         home_lineup = self._get_recent_lineup(game.home_team_id, game.game_date)
         away_lineup = self._get_recent_lineup(game.away_team_id, game.game_date)
 
@@ -635,18 +686,14 @@ class InferencePipeline:
             is_home = recent_game.home_team_id == team_id
             lineup_str = stint.home_lineup if is_home else stint.away_lineup
             lineup = (
-                json.loads(lineup_str)
-                if isinstance(lineup_str, str)
-                else lineup_str
+                json.loads(lineup_str) if isinstance(lineup_str, str) else lineup_str
             )
             return lineup if isinstance(lineup, list) else []
         except (json.JSONDecodeError, TypeError):
             return []
 
-    def _build_player_features_df(self):
+    def _build_player_features_df(self) -> pd.DataFrame:
         """Build player features DataFrame for GNN."""
-        import pandas as pd
-
         from nba_model.data.models import Player, PlayerRAPM
 
         # Query player data
@@ -662,14 +709,16 @@ class InferencePipeline:
                 .first()
             )
 
-            data.append({
-                "player_id": player.player_id,
-                "height_inches": player.height_inches or 78,  # Default 6'6"
-                "weight_lbs": player.weight_lbs or 210,
-                "orapm": rapm.orapm if rapm else 0.0,
-                "drapm": rapm.drapm if rapm else 0.0,
-                "rapm": rapm.rapm if rapm else 0.0,
-            })
+            data.append(
+                {
+                    "player_id": player.player_id,
+                    "height_inches": player.height_inches or 78,  # Default 6'6"
+                    "weight_lbs": player.weight_lbs or 210,
+                    "orapm": rapm.orapm if rapm else 0.0,
+                    "drapm": rapm.drapm if rapm else 0.0,
+                    "rapm": rapm.rapm if rapm else 0.0,
+                }
+            )
 
         return pd.DataFrame(data).set_index("player_id")
 

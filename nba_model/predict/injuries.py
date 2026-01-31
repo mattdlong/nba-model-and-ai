@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar, TypedDict
 
 import pandas as pd
 
@@ -35,7 +35,19 @@ from nba_model.types import GameId, PlayerId, TeamId
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
+    from nba_model.predict.inference import GamePrediction
+
 logger = get_logger(__name__)
+
+
+class AdjustmentValuesDict(TypedDict):
+    """Type for injury adjustment values dictionary."""
+
+    home_win_prob_adjusted: float
+    predicted_margin_adjusted: float
+    predicted_total_adjusted: float
+    injury_uncertainty: float
+
 
 # =============================================================================
 # Constants
@@ -290,7 +302,9 @@ class InjuryAdjuster:
 
             if len(recent_games) >= 20:
                 # Calculate average minutes
-                avg_minutes = sum(g.minutes or 0 for g in recent_games) / len(recent_games)
+                avg_minutes = sum(g.minutes or 0 for g in recent_games) / len(
+                    recent_games
+                )
 
                 # Players with high minutes tend to play more
                 if avg_minutes > 32:
@@ -306,9 +320,9 @@ class InjuryAdjuster:
 
     def adjust_prediction(
         self,
-        base_prediction,
+        base_prediction: GamePrediction,
         game_id: GameId,
-    ):
+    ) -> GamePrediction:
         """Adjust a GamePrediction based on injury report.
 
         For each questionable player:
@@ -332,8 +346,12 @@ class InjuryAdjuster:
 
         # Update prediction fields
         base_prediction.home_win_prob_adjusted = adjustment["home_win_prob_adjusted"]
-        base_prediction.predicted_margin_adjusted = adjustment["predicted_margin_adjusted"]
-        base_prediction.predicted_total_adjusted = adjustment["predicted_total_adjusted"]
+        base_prediction.predicted_margin_adjusted = adjustment[
+            "predicted_margin_adjusted"
+        ]
+        base_prediction.predicted_total_adjusted = adjustment[
+            "predicted_total_adjusted"
+        ]
         base_prediction.injury_uncertainty = adjustment["injury_uncertainty"]
 
         return base_prediction
@@ -344,26 +362,27 @@ class InjuryAdjuster:
         base_home_win_prob: float,
         base_margin: float,
         base_total: float,
-    ) -> dict:
-        """Adjust prediction values based on injury report.
+    ) -> AdjustmentValuesDict:
+        """Adjust prediction values using Bayesian scenario-based expected values.
+
+        Implements the two-scenario adjustment algorithm:
+        1. For each player with uncertain status, compute play probability
+        2. Compute predictions for both scenarios (plays / sits)
+        3. Calculate expected value: E[X] = P(plays)*X_plays + P(sits)*X_sits
+        4. Calculate uncertainty from variance of possible outcomes
 
         Args:
             game_id: Game identifier.
-            base_home_win_prob: Base home win probability.
-            base_margin: Base predicted margin.
-            base_total: Base predicted total.
+            base_home_win_prob: Base home win probability (assumes all play).
+            base_margin: Base predicted margin (assumes all play).
+            base_total: Base predicted total (assumes all play).
 
         Returns:
             Dictionary with adjusted values and uncertainty.
         """
-        # Get game teams
         from nba_model.data.models import Game
 
-        game = (
-            self.db_session.query(Game)
-            .filter(Game.game_id == game_id)
-            .first()
-        )
+        game = self.db_session.query(Game).filter(Game.game_id == game_id).first()
 
         if game is None:
             return {
@@ -377,33 +396,52 @@ class InjuryAdjuster:
         home_injuries = self._get_team_injuries(game.home_team_id)
         away_injuries = self._get_team_injuries(game.away_team_id)
 
-        # Calculate adjustments
-        home_adjustment, home_uncertainty = self._calculate_team_adjustment(
-            home_injuries, game.home_team_id
+        # Calculate scenario-based expected values for each team
+        home_result = self._calculate_scenario_expected_values(
+            injuries=home_injuries,
+            team_id=game.home_team_id,
+            base_value=base_home_win_prob,
+            is_home_team=True,
         )
-        away_adjustment, away_uncertainty = self._calculate_team_adjustment(
-            away_injuries, game.away_team_id
+        away_result = self._calculate_scenario_expected_values(
+            injuries=away_injuries,
+            team_id=game.away_team_id,
+            base_value=1.0 - base_home_win_prob,  # Away perspective
+            is_home_team=False,
         )
 
-        # Adjust predictions
-        # Win probability adjustment based on relative team strength changes
-        net_adjustment = home_adjustment - away_adjustment
-        adjusted_win_prob = base_home_win_prob + net_adjustment * 0.1
+        # Compute expected win probability
+        # For home team: start with base and apply adjustments
+        # The adjustment is the difference between expected value and base
+        home_expected = home_result["expected_adjustment"]
+        away_expected = away_result["expected_adjustment"]
 
-        # Margin adjustment (RAPM-based)
-        adjusted_margin = base_margin + net_adjustment * 2.0
+        # Net adjustment to home win probability
+        # Positive home adjustment increases home win prob
+        # Positive away adjustment (helps away) decreases home win prob
+        net_win_prob_adjustment = home_expected - away_expected
+        adjusted_win_prob = base_home_win_prob + net_win_prob_adjustment
 
-        # Total adjustment (both teams affected)
-        total_adjustment = (home_adjustment + away_adjustment) * -0.5
-        adjusted_total = base_total + total_adjustment
+        # Margin adjustment follows win probability
+        # RAPM difference of ~3 points = ~10% win probability change
+        margin_factor = 3.0 / 0.10  # ~30 points per 100% win prob
+        adjusted_margin = base_margin + net_win_prob_adjustment * margin_factor
 
-        # Clamp values
+        # Total adjustment based on expected scoring changes
+        # Missing players reduce total scoring
+        home_total_adj = home_result["expected_total_adjustment"]
+        away_total_adj = away_result["expected_total_adjustment"]
+        adjusted_total = base_total + home_total_adj + away_total_adj
+
+        # Clamp to reasonable bounds
         adjusted_win_prob = max(0.01, min(0.99, adjusted_win_prob))
         adjusted_margin = max(-35, min(35, adjusted_margin))
         adjusted_total = max(175, min(270, adjusted_total))
 
-        # Combined uncertainty
-        total_uncertainty = (home_uncertainty + away_uncertainty) / 2
+        # Combined uncertainty from both teams
+        total_uncertainty = (
+            home_result["uncertainty"] + away_result["uncertainty"]
+        ) / 2.0
 
         return {
             "home_win_prob_adjusted": adjusted_win_prob,
@@ -411,6 +449,110 @@ class InjuryAdjuster:
             "predicted_total_adjusted": adjusted_total,
             "injury_uncertainty": total_uncertainty,
         }
+
+    def _calculate_scenario_expected_values(
+        self,
+        injuries: list[InjuryReport],
+        team_id: TeamId,
+        base_value: float,
+        is_home_team: bool,
+    ) -> dict[str, float]:
+        """Calculate expected values across play/sit scenarios for a team.
+
+        For each uncertain player, computes:
+        E[adjustment] = P(plays) * adj_if_plays + P(sits) * adj_if_sits
+
+        Where adj_if_plays = 0 (base case) and adj_if_sits = -RAPM_impact
+
+        Args:
+            injuries: List of injury reports for the team.
+            team_id: Team identifier.
+            base_value: Base prediction value (assumes all play).
+            is_home_team: Whether this is the home team.
+
+        Returns:
+            Dict with 'expected_adjustment', 'expected_total_adjustment',
+            and 'uncertainty'.
+        """
+        if not injuries:
+            return {
+                "expected_adjustment": 0.0,
+                "expected_total_adjustment": 0.0,
+                "uncertainty": 0.0,
+            }
+
+        total_expected_adjustment = 0.0
+        total_expected_total_adj = 0.0
+        total_variance = 0.0
+
+        for injury in injuries:
+            # Get play probability for this player
+            play_prob = self.get_play_probability(
+                injury.player_id,
+                injury.status,
+                injury.injury_description,
+            )
+
+            # Calculate the RAPM-based impact if player sits
+            # This is the win probability impact of replacing this player
+            replacement_impact = self.calculate_replacement_impact(
+                injury.player_id,
+                None,  # Unknown replacement
+                team_id,
+            )
+
+            # Two scenarios:
+            # 1. Player plays (prob = play_prob): adjustment = 0 (base case)
+            # 2. Player sits (prob = 1 - play_prob): adjustment = -replacement_impact
+            #
+            # Expected adjustment = play_prob * 0 + (1 - play_prob) * (-replacement_impact)
+            #                     = -(1 - play_prob) * replacement_impact
+            sit_prob = 1.0 - play_prob
+            expected_adjustment = -sit_prob * replacement_impact
+
+            total_expected_adjustment += expected_adjustment
+
+            # Total points adjustment (players contribute to scoring)
+            # Estimate ~0.5 points per game per RAPM point
+            starter_rapm = self._get_player_rapm(injury.player_id)
+            points_impact = starter_rapm * 0.5  # Approximate points contribution
+            expected_total_adj = -sit_prob * points_impact
+            total_expected_total_adj += expected_total_adj
+
+            # Calculate variance for uncertainty
+            # Variance of binary outcome: p(1-p) * (diff between outcomes)^2
+            outcome_diff = abs(replacement_impact)
+            variance = play_prob * sit_prob * (outcome_diff**2)
+            total_variance += variance
+
+        # Uncertainty is sqrt of total variance, normalized
+        uncertainty = min(1.0, (total_variance**0.5) * 10)
+
+        return {
+            "expected_adjustment": total_expected_adjustment,
+            "expected_total_adjustment": total_expected_total_adj,
+            "uncertainty": uncertainty,
+        }
+
+    def _get_player_rapm(self, player_id: PlayerId) -> float:
+        """Get a player's RAPM value.
+
+        Args:
+            player_id: Player identifier.
+
+        Returns:
+            Player's RAPM value, or 0.0 if not found.
+        """
+        from nba_model.data.models import PlayerRAPM
+
+        rapm = (
+            self.db_session.query(PlayerRAPM)
+            .filter(PlayerRAPM.player_id == player_id)
+            .order_by(PlayerRAPM.calculation_date.desc())
+            .first()
+        )
+
+        return rapm.rapm if rapm else 0.0
 
     def calculate_replacement_impact(
         self,
@@ -466,53 +608,35 @@ class InjuryAdjuster:
     def _get_team_injuries(self, team_id: TeamId) -> list[InjuryReport]:
         """Get current injury reports for a team.
 
-        Note: This is a simplified implementation. Full version would
-        fetch from NBA API or web scraping.
-        """
-        # In production, this would query current injury data
-        # For now, return empty list (no injuries)
-        return []
+        Fetches from the NBA injury report endpoint and converts
+        to InjuryReport objects.
 
-    def _calculate_team_adjustment(
-        self,
-        injuries: list[InjuryReport],
-        team_id: TeamId,
-    ) -> tuple[float, float]:
-        """Calculate team-level adjustment and uncertainty from injuries.
+        Args:
+            team_id: Team identifier.
 
         Returns:
-            Tuple of (adjustment_value, uncertainty_score).
+            List of InjuryReport objects for the team.
         """
-        if not injuries:
-            return 0.0, 0.0
+        fetcher = InjuryReportFetcher()
+        df = fetcher.get_team_injuries(team_id)
 
-        total_adjustment = 0.0
-        total_uncertainty = 0.0
+        if df.empty:
+            return []
 
-        for injury in injuries:
-            # Get play probability
-            play_prob = self.get_play_probability(
-                injury.player_id,
-                injury.status,
-                injury.injury_description,
+        injuries = []
+        for _, row in df.iterrows():
+            injuries.append(
+                InjuryReport(
+                    player_id=row["player_id"],
+                    player_name=row["player_name"],
+                    team_id=row["team_id"],
+                    status=row["status"],
+                    injury_description=row["injury_description"],
+                    report_date=row["report_date"],
+                )
             )
 
-            # Get player impact
-            impact = self.calculate_replacement_impact(
-                injury.player_id,
-                None,  # Unknown replacement
-                team_id,
-            )
-
-            # Weighted adjustment by probability of sitting
-            sit_prob = 1.0 - play_prob
-            total_adjustment += impact * sit_prob
-
-            # Uncertainty from questionable players (not certain outcomes)
-            if 0.1 < play_prob < 0.9:
-                total_uncertainty += abs(impact) * min(play_prob, sit_prob)
-
-        return total_adjustment, total_uncertainty
+        return injuries
 
 
 # =============================================================================
@@ -521,40 +645,200 @@ class InjuryAdjuster:
 
 
 class InjuryReportFetcher:
-    """Fetch current injury status data from external sources.
+    """Fetch current injury status data from NBA sources.
 
-    Note: Full implementation would use NBA API or web scraping.
-    This is a simplified version for the Phase 7 implementation.
+    Fetches injury data from the NBA's official injury report endpoint.
+    Uses rate limiting and error handling to ensure reliable data retrieval.
+
+    Attributes:
+        api_delay: Delay between API calls in seconds.
+        timeout: Request timeout in seconds.
+        _cache: Cached injury data with timestamp.
+        _cache_ttl: Cache time-to-live in seconds.
     """
 
-    def __init__(self, api_delay: float = 0.6) -> None:
+    # NBA injury report endpoint
+    INJURY_REPORT_URL = (
+        "https://cdn.nba.com/static/json/liveData/injuries/injuries.json"
+    )
+
+    # Team ID mapping from NBA tricode to team_id
+    TEAM_TRICODE_TO_ID: ClassVar[dict[str, int]] = {
+        "ATL": 1610612737,
+        "BOS": 1610612738,
+        "BKN": 1610612751,
+        "CHA": 1610612766,
+        "CHI": 1610612741,
+        "CLE": 1610612739,
+        "DAL": 1610612742,
+        "DEN": 1610612743,
+        "DET": 1610612765,
+        "GSW": 1610612744,
+        "HOU": 1610612745,
+        "IND": 1610612754,
+        "LAC": 1610612746,
+        "LAL": 1610612747,
+        "MEM": 1610612763,
+        "MIA": 1610612748,
+        "MIL": 1610612749,
+        "MIN": 1610612750,
+        "NOP": 1610612740,
+        "NYK": 1610612752,
+        "OKC": 1610612760,
+        "ORL": 1610612753,
+        "PHI": 1610612755,
+        "PHX": 1610612756,
+        "POR": 1610612757,
+        "SAC": 1610612758,
+        "SAS": 1610612759,
+        "TOR": 1610612761,
+        "UTA": 1610612762,
+        "WAS": 1610612764,
+    }
+
+    def __init__(
+        self,
+        api_delay: float = 0.6,
+        timeout: float = 10.0,
+        cache_ttl: float = 300.0,
+    ) -> None:
         """Initialize InjuryReportFetcher.
 
         Args:
             api_delay: Delay between API calls in seconds.
+            timeout: Request timeout in seconds.
+            cache_ttl: Cache time-to-live in seconds (default 5 minutes).
         """
         self.api_delay = api_delay
+        self.timeout = timeout
+        self._cache: pd.DataFrame | None = None
+        self._cache_time: float = 0.0
+        self._cache_ttl = cache_ttl
         logger.debug("Initialized InjuryReportFetcher")
+
+    def _fetch_from_nba(self) -> pd.DataFrame:
+        """Fetch injury data from NBA's official endpoint.
+
+        Returns:
+            DataFrame with injury data.
+
+        Raises:
+            Exception: If fetching fails.
+        """
+        import time
+
+        import requests
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Referer": "https://www.nba.com/",
+        }
+
+        time.sleep(self.api_delay)
+
+        response = requests.get(
+            self.INJURY_REPORT_URL,
+            headers=headers,
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+
+        data = response.json()
+        injuries = []
+
+        # Parse the JSON response
+        # The NBA injury JSON format has a "teams" array with nested player data
+        teams_data = data.get("league", {}).get("teams", [])
+
+        for team in teams_data:
+            team_tricode = team.get("teamTricode", "")
+            team_id = self.TEAM_TRICODE_TO_ID.get(team_tricode, 0)
+
+            players = team.get("players", [])
+            for player in players:
+                player_id = player.get("personId", 0)
+                player_name = f"{player.get('firstName', '')} {player.get('lastName', '')}".strip()
+                status = player.get("injuryStatus", "")
+                injury_desc = player.get("comment", "")
+                report_date_str = player.get("reportDate", "")
+
+                # Parse report date
+                try:
+                    if report_date_str:
+                        report_date = datetime.strptime(
+                            report_date_str, "%Y-%m-%d"
+                        ).date()
+                    else:
+                        report_date = date.today()
+                except ValueError:
+                    report_date = date.today()
+
+                if status:  # Only include players with a status
+                    injuries.append(
+                        {
+                            "player_id": player_id,
+                            "player_name": player_name,
+                            "team_id": team_id,
+                            "status": parse_injury_status(status),
+                            "injury_description": injury_desc,
+                            "report_date": report_date,
+                        }
+                    )
+
+        return pd.DataFrame(injuries)
 
     def get_current_injuries(self) -> pd.DataFrame:
         """Get current injury report.
 
+        Fetches from NBA's official injury endpoint with caching.
+        Falls back to empty DataFrame on error.
+
         Returns:
             DataFrame with columns:
-                player_id, team_id, status, injury_description, report_date
+                player_id, player_name, team_id, status, injury_description, report_date
         """
-        # In production, this would fetch from NBA API
-        # For now, return empty DataFrame
-        return pd.DataFrame(
-            columns=[
-                "player_id",
-                "player_name",
-                "team_id",
-                "status",
-                "injury_description",
-                "report_date",
-            ]
-        )
+        import time
+
+        # Check cache
+        if self._cache is not None:
+            cache_age = time.time() - self._cache_time
+            if cache_age < self._cache_ttl:
+                logger.debug("Using cached injury data (age: {:.1f}s)", cache_age)
+                return self._cache.copy()
+
+        try:
+            logger.debug("Fetching injury data from NBA endpoint")
+            df = self._fetch_from_nba()
+            logger.info("Fetched {} injury reports", len(df))
+
+            # Update cache
+            self._cache = df
+            self._cache_time = time.time()
+
+            return df.copy()
+
+        except Exception as e:
+            logger.warning("Failed to fetch injury data: {}", e)
+
+            # Return cached data if available (even if stale)
+            if self._cache is not None:
+                logger.debug("Returning stale cached injury data")
+                return self._cache.copy()
+
+            # Return empty DataFrame as fallback
+            return pd.DataFrame(
+                columns=[
+                    "player_id",
+                    "player_name",
+                    "team_id",
+                    "status",
+                    "injury_description",
+                    "report_date",
+                ]
+            )
 
     def get_team_injuries(self, team_id: TeamId) -> pd.DataFrame:
         """Get injury report for a specific team.
@@ -566,7 +850,9 @@ class InjuryReportFetcher:
             Filtered injury DataFrame for the team.
         """
         all_injuries = self.get_current_injuries()
-        return all_injuries[all_injuries["team_id"] == team_id]
+        if all_injuries.empty:
+            return all_injuries
+        return all_injuries[all_injuries["team_id"] == team_id].copy()
 
 
 # =============================================================================
