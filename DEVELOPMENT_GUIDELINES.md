@@ -472,6 +472,180 @@ nba-model/
 | `data/` | Database, model weights, cache | **Yes** |
 | `data/models/` | Trained model checkpoints | **Yes** |
 
+### 3.2 CLAUDE.md Documentation Requirements
+
+Every directory in the project MUST contain a `CLAUDE.md` file that provides context-aware documentation for AI assistants working with the codebase. These files form a hierarchical documentation system with strict rules about abstraction level at each depth.
+
+#### 3.2.1 Purpose
+
+CLAUDE.md files serve as **machine-readable context** that helps AI coding assistants (Claude, GPT, etc.) understand:
+- What code exists at this level
+- How it fits into the larger system
+- What conventions and patterns to follow
+- What NOT to do
+
+#### 3.2.2 Hierarchy and Abstraction Levels
+
+| Directory Level | Abstraction | Content Focus | Length |
+|-----------------|-------------|---------------|--------|
+| **Root** (`/`) | Strategic | Project vision, architecture overview, phase status, key decisions | 100-200 lines |
+| **Package** (`/nba_model/`) | Architectural | Module relationships, data flow, public API surface, cross-cutting concerns | 80-150 lines |
+| **Subpackage** (`/nba_model/data/`) | Component | Component responsibility, internal structure, key classes, integration points | 50-100 lines |
+| **Leaf** (`/nba_model/data/collectors/`) | Implementation | Specific patterns, file-by-file breakdown, gotchas, examples | 30-80 lines |
+
+#### 3.2.3 Required Sections by Level
+
+**Root Level CLAUDE.md:**
+```markdown
+# Project Name
+
+## Overview
+One paragraph explaining what this project does.
+
+## Architecture
+High-level system diagram or description.
+
+## Development Phases
+Current status of each phase (with completion %).
+
+## Key Decisions
+Major architectural decisions and their rationale.
+
+## Quick Reference
+- Entry points
+- Key commands
+- Important paths
+
+## Anti-Patterns
+What to avoid at the project level.
+```
+
+**Package Level CLAUDE.md (e.g., `/nba_model/CLAUDE.md`):**
+```markdown
+# Package Name
+
+## Purpose
+What this package does in 2-3 sentences.
+
+## Module Map
+| Module | Responsibility | Key Exports |
+|--------|---------------|-------------|
+
+## Data Flow
+How data moves through this package.
+
+## Dependencies
+External and internal dependencies.
+
+## Conventions
+Package-specific patterns to follow.
+```
+
+**Subpackage Level CLAUDE.md (e.g., `/nba_model/data/CLAUDE.md`):**
+```markdown
+# Subpackage Name
+
+## Responsibility
+Single paragraph on what this subpackage owns.
+
+## Structure
+Brief description of each file/subdirectory.
+
+## Key Classes
+Most important classes with one-line descriptions.
+
+## Usage Examples
+Code snippets showing typical usage.
+
+## Integration Points
+How this connects to other subpackages.
+```
+
+**Leaf Level CLAUDE.md (e.g., `/nba_model/data/collectors/CLAUDE.md`):**
+```markdown
+# Component Name
+
+## Files
+| File | Purpose |
+|------|---------|
+
+## Patterns
+Specific implementation patterns used here.
+
+## Common Tasks
+- How to add a new X
+- How to modify Y
+- How to test Z
+
+## Gotchas
+Specific pitfalls and edge cases.
+```
+
+#### 3.2.4 Mandatory Rules
+
+1. **Every directory with Python code MUST have a CLAUDE.md** - No exceptions.
+
+2. **Abstraction must decrease with depth** - Root discusses strategy; leaves discuss implementation.
+
+3. **No duplication across levels** - Each level adds NEW information, not repeats.
+
+4. **Update on every PR** - If code changes, CLAUDE.md MUST be updated in the same commit.
+
+5. **Cross-references use relative paths** - Link to related CLAUDE.md files: `See [data layer](./data/CLAUDE.md)`.
+
+6. **Include anti-patterns** - Every CLAUDE.md must have a "Don't" or "Anti-Patterns" section.
+
+7. **Keep current** - Outdated CLAUDE.md is worse than none. Delete sections that become stale.
+
+8. **Test directory mirrors source** - `tests/unit/data/CLAUDE.md` should exist if `nba_model/data/CLAUDE.md` exists.
+
+#### 3.2.5 Template Enforcement
+
+Use this checklist before committing:
+
+```bash
+# Verify all directories have CLAUDE.md
+find nba_model -type d -exec test -f {}/CLAUDE.md \; -print
+
+# Check CLAUDE.md files are not empty
+find . -name "CLAUDE.md" -empty
+
+# Verify no CLAUDE.md exceeds 200 lines at root or 100 lines in subpackages
+wc -l $(find . -name "CLAUDE.md")
+```
+
+#### 3.2.6 Example: Good vs Bad
+
+**BAD (too vague, wrong level):**
+```markdown
+# Data
+
+This folder contains data stuff.
+```
+
+**GOOD (appropriate detail for subpackage):**
+```markdown
+# Data Layer
+
+## Responsibility
+Owns all data acquisition, storage, and retrieval. Single source of truth for NBA data.
+
+## Structure
+- `api.py` - Rate-limited NBA API client (0.6s delay, 3 retries)
+- `models.py` - SQLAlchemy ORM (Game, Player, Stint, Shot)
+- `pipelines.py` - ETL orchestration with checkpointing
+- `collectors/` - Individual data collectors by entity type
+
+## Key Classes
+- `NBAApiClient` - Singleton API wrapper with circuit breaker
+- `DataPipeline` - Orchestrates collection with resume capability
+
+## Anti-Patterns
+- ❌ Never call NBA API directly - always use `NBAApiClient`
+- ❌ Never write raw SQL - use SQLAlchemy ORM
+- ❌ Never skip checkpointing - pipeline must be resumable
+```
+
 ---
 
 ## 4. Code Organization
