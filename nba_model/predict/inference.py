@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from nba_model.models.registry import ModelRegistry
+    from nba_model.predict.injuries import AdjustmentValuesDict
 
 
 class GameInfoDict(TypedDict):
@@ -62,7 +63,9 @@ class InjuryAdjusterProtocol(Protocol):
         base_home_win_prob: float,
         base_margin: float,
         base_total: float,
-    ) -> dict: ...
+        home_lineup: list[int] | None = None,
+        away_lineup: list[int] | None = None,
+    ) -> AdjustmentValuesDict: ...
 
 
 class LineupGraphBuilderProtocol(Protocol):
@@ -231,6 +234,7 @@ class InferencePipeline:
         device: torch.device | None = None,
         context_feature_builder: ContextFeatureBuilderProtocol | None = None,
         injury_adjuster: InjuryAdjusterProtocol | None = None,
+        lineup_graph_builder: LineupGraphBuilderProtocol | None = None,
     ) -> None:
         """Initialize InferencePipeline.
 
@@ -243,6 +247,8 @@ class InferencePipeline:
                 If None, creates a default instance.
             injury_adjuster: Optional injected InjuryAdjuster.
                 If None, creates a default instance.
+            lineup_graph_builder: Optional injected LineupGraphBuilder.
+                If None, creates a default instance when needed.
         """
         self.registry = model_registry
         self.db_session = db_session
@@ -256,6 +262,7 @@ class InferencePipeline:
         # Store injected dependencies (lazy-load defaults if None)
         self._context_feature_builder = context_feature_builder
         self._injury_adjuster = injury_adjuster
+        self._lineup_graph_builder = lineup_graph_builder
 
         # Lazy-load models
         self._models_loaded = False
@@ -351,6 +358,9 @@ class InferencePipeline:
         transformer_out = self._get_transformer_output(game_id)
         gnn_out = self._get_gnn_output(game_id)
 
+        # Ensure fusion model is loaded
+        assert self._fusion is not None
+
         # Run inference
         with torch.no_grad():
             outputs = self._fusion(
@@ -385,11 +395,17 @@ class InferencePipeline:
         if apply_injury_adjustment:
             try:
                 adjuster = self._get_injury_adjuster()
+                # Get lineup IDs for two-scenario model scoring
+                home_lineup_ids, away_lineup_ids = self._get_expected_lineup_ids(
+                    game_id
+                )
                 adjustment = adjuster.adjust_prediction_values(
                     game_id=game_id,
                     base_home_win_prob=home_win_prob,
                     base_margin=predicted_margin,
                     base_total=predicted_total,
+                    home_lineup=home_lineup_ids,
+                    away_lineup=away_lineup_ids,
                 )
                 home_win_prob_adjusted = adjustment["home_win_prob_adjusted"]
                 predicted_margin_adjusted = adjustment["predicted_margin_adjusted"]
@@ -522,12 +538,106 @@ class InferencePipeline:
         return self._context_feature_builder
 
     def _get_injury_adjuster(self) -> InjuryAdjusterProtocol:
-        """Get or create the injury adjuster."""
-        if self._injury_adjuster is None:
-            from nba_model.predict.injuries import InjuryAdjuster
+        """Get or create the injury adjuster with lineup scorer callback."""
+        if self._injury_adjuster is not None:
+            return self._injury_adjuster
 
-            self._injury_adjuster = InjuryAdjuster(self.db_session)
-        return self._injury_adjuster
+        from nba_model.predict.injuries import InjuryAdjuster
+
+        # Create lineup scorer callback for two-scenario model scoring
+        adjuster: InjuryAdjusterProtocol = InjuryAdjuster(
+            self.db_session,
+            lineup_scorer=self._score_lineup,
+        )
+        self._injury_adjuster = adjuster
+        return adjuster
+
+    def _score_lineup(
+        self,
+        game_id: GameId,
+        home_lineup: list[int],
+        away_lineup: list[int],
+    ) -> tuple[float, float, float]:
+        """Score a lineup configuration using the fusion model.
+
+        This callback is provided to InjuryAdjuster for true two-scenario
+        model scoring.
+
+        Args:
+            game_id: Game identifier.
+            home_lineup: Home team player IDs.
+            away_lineup: Away team player IDs.
+
+        Returns:
+            Tuple of (home_win_prob, margin, total).
+        """
+        # Ensure models are loaded (this method is called during predict_game)
+        assert self._gnn is not None
+        assert self._fusion is not None
+
+        # Build context features (these don't change between lineup scenarios)
+        context_features = self._build_context_features(game_id)
+
+        # Build player features DataFrame
+        player_features_df = self._build_player_features_df()
+
+        # Build GNN output for the specific lineup
+        try:
+            if len(home_lineup) >= 4 and len(away_lineup) >= 4:
+                # Pad lineup to 5 if needed (with zeros for missing players)
+                padded_home = home_lineup + [0] * (5 - len(home_lineup))
+                padded_away = away_lineup + [0] * (5 - len(away_lineup))
+
+                builder = self._get_lineup_graph_builder(player_features_df)
+                graph = builder.build_graph(padded_home[:5], padded_away[:5])
+
+                with torch.no_grad():
+                    graph = graph.to(self.device)
+                    gnn_out = self._gnn(graph).squeeze().cpu()
+            else:
+                gnn_out = torch.zeros(DEFAULT_GNN_DIM)
+        except Exception as e:
+            logger.debug("Lineup scoring GNN failed: {}", e)
+            gnn_out = torch.zeros(DEFAULT_GNN_DIM)
+
+        # Transformer output (zeros for pre-game)
+        transformer_out = torch.zeros(DEFAULT_TRANSFORMER_DIM)
+
+        # Run fusion model
+        with torch.no_grad():
+            outputs = self._fusion(
+                context_features.unsqueeze(0).to(self.device),
+                transformer_out.unsqueeze(0).to(self.device),
+                gnn_out.unsqueeze(0).to(self.device),
+            )
+
+        home_win_prob = float(outputs["win_prob"].squeeze().cpu())
+        margin = float(outputs["margin"].squeeze().cpu())
+        total = float(outputs["total"].squeeze().cpu())
+
+        # Clamp to reasonable bounds
+        home_win_prob = max(MIN_WIN_PROB, min(MAX_WIN_PROB, home_win_prob))
+        margin = max(MIN_MARGIN, min(MAX_MARGIN, margin))
+        total = max(MIN_TOTAL, min(MAX_TOTAL, total))
+
+        return home_win_prob, margin, total
+
+    def _get_lineup_graph_builder(
+        self, player_features_df: pd.DataFrame
+    ) -> LineupGraphBuilderProtocol:
+        """Get or create the lineup graph builder.
+
+        Args:
+            player_features_df: Player features DataFrame for building graphs.
+
+        Returns:
+            LineupGraphBuilder instance.
+        """
+        if self._lineup_graph_builder is None:
+            from nba_model.models.gnn import LineupGraphBuilder
+
+            self._lineup_graph_builder = LineupGraphBuilder(player_features_df)
+        return self._lineup_graph_builder
 
     def _build_context_features(self, game_id: GameId) -> torch.Tensor:
         """Build context feature vector for Tower A."""
@@ -547,9 +657,10 @@ class InferencePipeline:
 
     def _get_gnn_output(self, game_id: GameId) -> torch.Tensor:
         """Get GNN output for lineup graph."""
-        from nba_model.models.gnn import LineupGraphBuilder
-
         try:
+            # Ensure GNN model is loaded (called after _ensure_models_loaded)
+            assert self._gnn is not None
+
             # Get expected lineups
             home_lineup, away_lineup = self._get_expected_lineup_ids(game_id)
 
@@ -557,13 +668,14 @@ class InferencePipeline:
                 # Build player features DataFrame
                 player_features_df = self._build_player_features_df()
 
-                builder = LineupGraphBuilder(player_features_df)
+                # Use injected or default lineup graph builder
+                builder = self._get_lineup_graph_builder(player_features_df)
                 graph = builder.build_graph(home_lineup, away_lineup)
 
                 # Run GNN
                 with torch.no_grad():
                     graph = graph.to(self.device)
-                    gnn_out = self._gnn(graph)
+                    gnn_out: torch.Tensor = self._gnn(graph)
                     return gnn_out.squeeze().cpu()
 
         except Exception as e:

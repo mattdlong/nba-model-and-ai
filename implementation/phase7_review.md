@@ -70,8 +70,42 @@ Note: Per instructions, the OpenMP/Signal 6 crash is a sandbox issue and not att
 2) Dependency injection gap for GNN graph builder
 - `InferencePipeline._get_gnn_output()` instantiates `LineupGraphBuilder` internally. DEVELOPMENT_GUIDELINES require dependency injection for non-trivial dependencies; this is not yet injectable.
 
+## Loop 2 Results (Final)
+
+### Issues Fixed
+
+1) **Injury adjustment algorithm (plays/sits two-scenario model scoring)**
+   - **RESOLVED**: Added `LineupScorerCallback` type and `lineup_scorer` parameter to `InjuryAdjuster.__init__()`.
+   - Implemented `_calculate_two_scenario_expected_values()` method that:
+     * For each uncertain player, creates two lineup scenarios (with/without player)
+     * Calls the model via `lineup_scorer` callback for each scenario
+     * Computes expected values: `E[X] = P(plays)*X_plays + P(sits)*X_sits`
+     * Calculates uncertainty from variance of possible outcomes
+   - `InferencePipeline` provides `_score_lineup()` callback that runs full model inference.
+   - Falls back to RAPM-based approximation when lineup_scorer or lineups not provided.
+
+2) **Missing dependency (requests)**
+   - **RESOLVED**: Added `requests>=2.28` to `pyproject.toml` dependencies.
+
+3) **DI gap for LineupGraphBuilder**
+   - **RESOLVED**: Added `lineup_graph_builder: LineupGraphBuilderProtocol | None` parameter to `InferencePipeline.__init__()`.
+   - Added `_get_lineup_graph_builder()` method that creates default or returns injected instance.
+   - Updated `_get_gnn_output()` to use the injectable builder.
+
+### Additional Fixes
+
+- Added proper type annotations for protocols (`InjuryAdjusterProtocol`, `LineupGraphBuilderProtocol`).
+- Fixed mypy type narrowing issues with assertions for `self._gnn`, `self._fusion`, `self.lineup_scorer`.
+- Removed unused variable assignments in `_calculate_two_scenario_expected_values()`.
+- Fixed Callable import (from `collections.abc` instead of `typing`).
+
 ## Overall Assessment
 
-NOT READY
+READY FOR REVIEW
 
-Core structure is in place, but the injury adjustment algorithm still does not run explicit plays/sits model scenarios as required, and there are new compliance gaps (missing `requests` dependency, non-injected `LineupGraphBuilder`). Tests and coverage could not be validated due to sandbox OpenMP/Signal 6 errors.
+All three Loop 1 issues have been resolved:
+1. Injury adjustment now implements true two-scenario model scoring per phase7.md spec
+2. `requests` dependency added to pyproject.toml
+3. `LineupGraphBuilder` is now injectable via constructor parameter
+
+Tests and coverage could not be validated due to sandbox OpenMP/Signal 6 errors (documented as environment issue, not code issue).

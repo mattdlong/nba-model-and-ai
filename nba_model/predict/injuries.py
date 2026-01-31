@@ -22,6 +22,7 @@ Example:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
@@ -38,6 +39,13 @@ if TYPE_CHECKING:
     from nba_model.predict.inference import GamePrediction
 
 logger = get_logger(__name__)
+
+
+# Type for lineup scorer callback
+# Takes (game_id, home_lineup_ids, away_lineup_ids) and returns (win_prob, margin, total)
+LineupScorerCallback = Callable[
+    [GameId, list[int], list[int]], tuple[float, float, float]
+]
 
 
 class AdjustmentValuesDict(TypedDict):
@@ -191,8 +199,13 @@ class InjuryAdjuster:
     3. Team context (back-to-back, playoffs, etc.)
     4. Injury type
 
+    When a lineup_scorer callback is provided, this adjuster will run true
+    two-scenario model scoring (player plays vs player sits) rather than
+    using RAPM-based approximations.
+
     Attributes:
         db_session: SQLAlchemy database session.
+        lineup_scorer: Optional callback to score lineup configurations.
 
     Example:
         >>> adjuster = InjuryAdjuster(session)
@@ -200,13 +213,21 @@ class InjuryAdjuster:
         >>> print(f"LeBron play probability: {prob:.1%}")
     """
 
-    def __init__(self, db_session: Session) -> None:
+    def __init__(
+        self,
+        db_session: Session,
+        lineup_scorer: LineupScorerCallback | None = None,
+    ) -> None:
         """Initialize InjuryAdjuster.
 
         Args:
             db_session: SQLAlchemy database session.
+            lineup_scorer: Optional callback that scores lineup configurations.
+                Signature: (game_id, home_lineup_ids, away_lineup_ids) -> (win_prob, margin, total)
+                When provided, enables true two-scenario model scoring.
         """
         self.db_session = db_session
+        self.lineup_scorer = lineup_scorer
         self._player_history_cache: dict[PlayerId, float] = {}
         logger.debug("Initialized InjuryAdjuster")
 
@@ -362,20 +383,27 @@ class InjuryAdjuster:
         base_home_win_prob: float,
         base_margin: float,
         base_total: float,
+        home_lineup: list[int] | None = None,
+        away_lineup: list[int] | None = None,
     ) -> AdjustmentValuesDict:
         """Adjust prediction values using Bayesian scenario-based expected values.
 
-        Implements the two-scenario adjustment algorithm:
+        Implements the two-scenario adjustment algorithm per phase7.md:
         1. For each player with uncertain status, compute play probability
-        2. Compute predictions for both scenarios (plays / sits)
+        2. Run model for both scenarios (player plays / player sits)
         3. Calculate expected value: E[X] = P(plays)*X_plays + P(sits)*X_sits
         4. Calculate uncertainty from variance of possible outcomes
+
+        When a lineup_scorer callback is available, this runs true model inference
+        for each scenario. Otherwise, falls back to RAPM-based approximation.
 
         Args:
             game_id: Game identifier.
             base_home_win_prob: Base home win probability (assumes all play).
             base_margin: Base predicted margin (assumes all play).
             base_total: Base predicted total (assumes all play).
+            home_lineup: Optional home lineup player IDs (for two-scenario scoring).
+            away_lineup: Optional away lineup player IDs (for two-scenario scoring).
 
         Returns:
             Dictionary with adjusted values and uncertainty.
@@ -396,7 +424,29 @@ class InjuryAdjuster:
         home_injuries = self._get_team_injuries(game.home_team_id)
         away_injuries = self._get_team_injuries(game.away_team_id)
 
-        # Calculate scenario-based expected values for each team
+        # If no injuries, return base predictions
+        if not home_injuries and not away_injuries:
+            return {
+                "home_win_prob_adjusted": base_home_win_prob,
+                "predicted_margin_adjusted": base_margin,
+                "predicted_total_adjusted": base_total,
+                "injury_uncertainty": 0.0,
+            }
+
+        # Use true two-scenario model scoring if lineup_scorer and lineups provided
+        if self.lineup_scorer is not None and home_lineup and away_lineup:
+            return self._calculate_two_scenario_expected_values(
+                game_id=game_id,
+                home_injuries=home_injuries,
+                away_injuries=away_injuries,
+                home_lineup=home_lineup,
+                away_lineup=away_lineup,
+                base_home_win_prob=base_home_win_prob,
+                base_margin=base_margin,
+                base_total=base_total,
+            )
+
+        # Fallback to RAPM-based approximation
         home_result = self._calculate_scenario_expected_values(
             injuries=home_injuries,
             team_id=game.home_team_id,
@@ -411,24 +461,17 @@ class InjuryAdjuster:
         )
 
         # Compute expected win probability
-        # For home team: start with base and apply adjustments
-        # The adjustment is the difference between expected value and base
         home_expected = home_result["expected_adjustment"]
         away_expected = away_result["expected_adjustment"]
 
-        # Net adjustment to home win probability
-        # Positive home adjustment increases home win prob
-        # Positive away adjustment (helps away) decreases home win prob
         net_win_prob_adjustment = home_expected - away_expected
         adjusted_win_prob = base_home_win_prob + net_win_prob_adjustment
 
         # Margin adjustment follows win probability
-        # RAPM difference of ~3 points = ~10% win probability change
         margin_factor = 3.0 / 0.10  # ~30 points per 100% win prob
         adjusted_margin = base_margin + net_win_prob_adjustment * margin_factor
 
         # Total adjustment based on expected scoring changes
-        # Missing players reduce total scoring
         home_total_adj = home_result["expected_total_adjustment"]
         away_total_adj = away_result["expected_total_adjustment"]
         adjusted_total = base_total + home_total_adj + away_total_adj
@@ -449,6 +492,257 @@ class InjuryAdjuster:
             "predicted_total_adjusted": adjusted_total,
             "injury_uncertainty": total_uncertainty,
         }
+
+    def _calculate_two_scenario_expected_values(
+        self,
+        game_id: GameId,
+        home_injuries: list[InjuryReport],
+        away_injuries: list[InjuryReport],
+        home_lineup: list[int],
+        away_lineup: list[int],
+        base_home_win_prob: float,
+        base_margin: float,
+        base_total: float,
+    ) -> AdjustmentValuesDict:
+        """Calculate expected values using true two-scenario model scoring.
+
+        For each uncertain player, runs the model with:
+        1. Player in lineup (plays scenario)
+        2. Player removed from lineup (sits scenario)
+
+        Then computes:
+        E[win_prob] = P(plays) * win_prob_plays + P(sits) * win_prob_sits
+
+        Args:
+            game_id: Game identifier.
+            home_injuries: Injury reports for home team.
+            away_injuries: Injury reports for away team.
+            home_lineup: Home team lineup player IDs.
+            away_lineup: Away team lineup player IDs.
+            base_home_win_prob: Base home win probability.
+            base_margin: Base predicted margin.
+            base_total: Base predicted total.
+
+        Returns:
+            Dictionary with expected adjusted values and uncertainty.
+        """
+        # Identify uncertain players in each lineup
+        home_uncertain = [
+            inj
+            for inj in home_injuries
+            if inj.player_id in home_lineup
+            and inj.status.lower() in ("questionable", "doubtful", "probable", "gtd")
+        ]
+        away_uncertain = [
+            inj
+            for inj in away_injuries
+            if inj.player_id in away_lineup
+            and inj.status.lower() in ("questionable", "doubtful", "probable", "gtd")
+        ]
+
+        # If no uncertain players, return base predictions
+        if not home_uncertain and not away_uncertain:
+            return {
+                "home_win_prob_adjusted": base_home_win_prob,
+                "predicted_margin_adjusted": base_margin,
+                "predicted_total_adjusted": base_total,
+                "injury_uncertainty": 0.0,
+            }
+
+        # Calculate expected values by enumerating key scenarios
+        # For efficiency, we handle the most impactful uncertain players
+        # (full enumeration would be 2^N scenarios)
+        total_variance = 0.0
+
+        # Get play probabilities for uncertain players
+        home_probs = [
+            (
+                inj.player_id,
+                self.get_play_probability(
+                    inj.player_id, inj.status, inj.injury_description
+                ),
+            )
+            for inj in home_uncertain
+        ]
+        away_probs = [
+            (
+                inj.player_id,
+                self.get_play_probability(
+                    inj.player_id, inj.status, inj.injury_description
+                ),
+            )
+            for inj in away_uncertain
+        ]
+
+        # Get replacement players for sits scenarios
+        home_replacements = self._get_replacement_player_ids(
+            [p[0] for p in home_probs], home_lineup
+        )
+        away_replacements = self._get_replacement_player_ids(
+            [p[0] for p in away_probs], away_lineup
+        )
+
+        # For tractability, we use independent expectation calculation
+        # E[X] ≈ base + sum of individual player adjustments
+        # This is valid when player effects are approximately additive
+        scenario_results: list[tuple[float, float, float, float]] = []
+
+        # Type narrowing: lineup_scorer is not None (checked by caller)
+        assert self.lineup_scorer is not None
+
+        # Score base scenario (all uncertain players play)
+        base_win, base_marg, base_tot = self.lineup_scorer(
+            game_id, home_lineup, away_lineup
+        )
+
+        # Process home team uncertain players
+        for player_id, play_prob in home_probs:
+            if play_prob >= 0.99:
+                continue  # Player almost certainly plays, skip
+
+            # Create sits lineup (replace player with bench player)
+            sits_home_lineup = home_lineup.copy()
+            player_idx = sits_home_lineup.index(player_id)
+            replacement = home_replacements.get(player_id)
+            if replacement:
+                sits_home_lineup[player_idx] = replacement
+            else:
+                # No replacement available, remove player (will use 4-player lineup)
+                sits_home_lineup.pop(player_idx)
+
+            # Score sits scenario
+            if len(sits_home_lineup) >= 4:  # Need at least 4 players
+                sits_win, sits_marg, sits_tot = self.lineup_scorer(
+                    game_id, sits_home_lineup, away_lineup
+                )
+
+                # Compute adjustment contribution for this player's uncertainty
+                # Using additive approximation: E[X] ≈ base + P(sits) * (X_sits - X_plays)
+                sit_prob = 1.0 - play_prob
+
+                # Calculate variance contribution
+                win_diff = abs(base_win - sits_win)
+                variance = play_prob * sit_prob * (win_diff**2)
+                total_variance += variance
+
+                scenario_results.append(
+                    (
+                        sit_prob * (sits_win - base_win),
+                        sit_prob * (sits_marg - base_marg),
+                        sit_prob * (sits_tot - base_tot),
+                        variance,
+                    )
+                )
+
+        # Process away team uncertain players
+        for player_id, play_prob in away_probs:
+            if play_prob >= 0.99:
+                continue
+
+            sits_away_lineup = away_lineup.copy()
+            player_idx = sits_away_lineup.index(player_id)
+            replacement = away_replacements.get(player_id)
+            if replacement:
+                sits_away_lineup[player_idx] = replacement
+            else:
+                sits_away_lineup.pop(player_idx)
+
+            if len(sits_away_lineup) >= 4:
+                sits_win, sits_marg, sits_tot = self.lineup_scorer(
+                    game_id, home_lineup, sits_away_lineup
+                )
+
+                sit_prob = 1.0 - play_prob
+                win_diff = abs(base_win - sits_win)
+                variance = play_prob * sit_prob * (win_diff**2)
+                total_variance += variance
+
+                scenario_results.append(
+                    (
+                        sit_prob * (sits_win - base_win),
+                        sit_prob * (sits_marg - base_marg),
+                        sit_prob * (sits_tot - base_tot),
+                        variance,
+                    )
+                )
+
+        # Sum adjustments (additive approximation)
+        win_adj = sum(r[0] for r in scenario_results)
+        marg_adj = sum(r[1] for r in scenario_results)
+        tot_adj = sum(r[2] for r in scenario_results)
+
+        adjusted_win_prob = base_win + win_adj
+        adjusted_margin = base_marg + marg_adj
+        adjusted_total = base_tot + tot_adj
+
+        # Clamp to reasonable bounds
+        adjusted_win_prob = max(0.01, min(0.99, adjusted_win_prob))
+        adjusted_margin = max(-35.0, min(35.0, adjusted_margin))
+        adjusted_total = max(175.0, min(270.0, adjusted_total))
+
+        # Uncertainty from variance of outcomes
+        uncertainty = min(1.0, (total_variance**0.5) * 5)
+
+        return {
+            "home_win_prob_adjusted": adjusted_win_prob,
+            "predicted_margin_adjusted": adjusted_margin,
+            "predicted_total_adjusted": adjusted_total,
+            "injury_uncertainty": uncertainty,
+        }
+
+    def _get_replacement_player_ids(
+        self,
+        player_ids: list[int],
+        current_lineup: list[int],
+    ) -> dict[int, int]:
+        """Get replacement player IDs for uncertain starters.
+
+        Finds bench players who could replace uncertain starters.
+
+        Args:
+            player_ids: List of uncertain player IDs.
+            current_lineup: Current starting lineup.
+
+        Returns:
+            Dict mapping uncertain player_id -> replacement player_id.
+        """
+        from nba_model.data.models import PlayerGameStats
+
+        replacements: dict[int, int] = {}
+
+        for player_id in player_ids:
+            # Find recent games for the player's team
+            recent_games = (
+                self.db_session.query(PlayerGameStats)
+                .filter(PlayerGameStats.player_id == player_id)
+                .order_by(PlayerGameStats.id.desc())
+                .limit(10)
+                .all()
+            )
+
+            if not recent_games:
+                continue
+
+            # Get other players from those games who aren't in the starting lineup
+            game_ids = list({g.game_id for g in recent_games})
+
+            bench_players = (
+                self.db_session.query(PlayerGameStats.player_id)
+                .filter(
+                    PlayerGameStats.game_id.in_(game_ids),
+                    PlayerGameStats.player_id.notin_(current_lineup),
+                    PlayerGameStats.minutes > 10,  # Meaningful minutes
+                )
+                .group_by(PlayerGameStats.player_id)
+                .order_by(PlayerGameStats.minutes.desc())
+                .limit(1)
+                .first()
+            )
+
+            if bench_players:
+                replacements[player_id] = bench_players[0]
+
+        return replacements
 
     def _calculate_scenario_expected_values(
         self,
