@@ -72,22 +72,28 @@ class TestStintData:
         """Should create stint data with all fields."""
         stint = StintData(
             game_id="0022300001",
-            team_id=1610612744,
-            lineup=[1, 2, 3, 4, 5],
+            period=1,
+            home_lineup=[1, 2, 3, 4, 5],
+            away_lineup=[6, 7, 8, 9, 10],
             start_event_num=1,
             end_event_num=50,
             start_time=0,
             end_time=300,
+            start_time_str="12:00",
+            end_time_str="7:00",
             home_points=10,
             away_points=8,
             possessions=12.5,
         )
 
         assert stint.game_id == "0022300001"
-        assert stint.team_id == 1610612744
-        assert stint.lineup == [1, 2, 3, 4, 5]
+        assert stint.period == 1
+        assert stint.home_lineup == [1, 2, 3, 4, 5]
+        assert stint.away_lineup == [6, 7, 8, 9, 10]
         assert stint.start_time == 0
         assert stint.end_time == 300
+        assert stint.start_time_str == "12:00"
+        assert stint.end_time_str == "7:00"
         assert stint.home_points == 10
         assert stint.away_points == 8
         assert stint.possessions == 12.5
@@ -96,8 +102,9 @@ class TestStintData:
         """Should have default values for points and possessions."""
         stint = StintData(
             game_id="0022300001",
-            team_id=1,
-            lineup=[1, 2, 3, 4, 5],
+            period=1,
+            home_lineup=[1, 2, 3, 4, 5],
+            away_lineup=[6, 7, 8, 9, 10],
             start_event_num=1,
             end_event_num=10,
             start_time=0,
@@ -107,6 +114,8 @@ class TestStintData:
         assert stint.home_points == 0
         assert stint.away_points == 0
         assert stint.possessions == 0.0
+        assert stint.start_time_str == "0:00"
+        assert stint.end_time_str == "0:00"
 
 
 class TestStintDeriver:
@@ -200,12 +209,12 @@ class TestInferTeamIds:
 
         @dataclass
         class MockPlay:
-            player1_team_id: int | None
+            team_id: int | None
 
         plays = [
-            MockPlay(player1_team_id=1610612744),  # GSW
-            MockPlay(player1_team_id=1610612747),  # LAL
-            MockPlay(player1_team_id=1610612744),
+            MockPlay(team_id=1610612744),  # GSW
+            MockPlay(team_id=1610612747),  # LAL
+            MockPlay(team_id=1610612744),
         ]
 
         home_id, away_id = deriver._infer_team_ids(plays)
@@ -219,11 +228,11 @@ class TestInferTeamIds:
 
         @dataclass
         class MockPlay:
-            player1_team_id: int | None
+            team_id: int | None
 
         plays = [
-            MockPlay(player1_team_id=None),
-            MockPlay(player1_team_id=0),
+            MockPlay(team_id=None),
+            MockPlay(team_id=0),
         ]
 
         home_id, away_id = deriver._infer_team_ids(plays)
@@ -236,11 +245,11 @@ class TestInferTeamIds:
 
         @dataclass
         class MockPlay:
-            player1_team_id: int | None
+            team_id: int | None
 
         plays = [
-            MockPlay(player1_team_id=1610612744),
-            MockPlay(player1_team_id=1610612744),
+            MockPlay(team_id=1610612744),
+            MockPlay(team_id=1610612744),
         ]
 
         home_id, away_id = deriver._infer_team_ids(plays)
@@ -270,7 +279,7 @@ class TestEstimatePossessions:
             event_num: int
             event_type: int
             home_description: str | None = None
-            visitor_description: str | None = None
+            away_description: str | None = None
 
         plays = [
             MockPlay(event_num=1, event_type=EVENT_FIELD_GOAL_MADE),
@@ -288,7 +297,7 @@ class TestEstimatePossessions:
             event_num: int
             event_type: int
             home_description: str | None = None
-            visitor_description: str | None = None
+            away_description: str | None = None
 
         plays = [
             MockPlay(event_num=1, event_type=EVENT_FREE_THROW),
@@ -306,7 +315,7 @@ class TestEstimatePossessions:
             event_num: int
             event_type: int
             home_description: str | None = None
-            visitor_description: str | None = None
+            away_description: str | None = None
 
         plays = [
             MockPlay(event_num=1, event_type=EVENT_TURNOVER),
@@ -323,7 +332,7 @@ class TestEstimatePossessions:
             event_num: int
             event_type: int
             home_description: str | None = None
-            visitor_description: str | None = None
+            away_description: str | None = None
 
         plays = [
             MockPlay(event_num=1, event_type=EVENT_FIELD_GOAL_MISSED),
@@ -341,7 +350,7 @@ class TestEstimatePossessions:
             event_num: int
             event_type: int
             home_description: str | None = None
-            visitor_description: str | None = None
+            away_description: str | None = None
 
         plays = [
             MockPlay(event_num=1, event_type=EVENT_FIELD_GOAL_MADE),  # Outside
@@ -360,7 +369,7 @@ class TestEstimatePossessions:
             event_num: int
             event_type: int
             home_description: str | None = None
-            visitor_description: str | None = None
+            away_description: str | None = None
 
         # Many offensive rebounds, no shots
         plays = [
@@ -394,11 +403,11 @@ class TestDeriveStints:
             period: int
             event_type: int
             player1_id: int | None
-            player1_team_id: int | None
+            team_id: int | None
             player2_id: int | None = None
-            pc_time_string: str | None = "12:00"
+            pc_time: str | None = "12:00"
             home_description: str | None = None
-            visitor_description: str | None = None
+            away_description: str | None = None
             score_home: int | None = None
             score_away: int | None = None
 
@@ -408,7 +417,7 @@ class TestDeriveStints:
                 period=1,
                 event_type=EVENT_PERIOD_START,
                 player1_id=None,
-                player1_team_id=None,
+                team_id=None,
             ),
         ]
 
@@ -439,7 +448,7 @@ class TestCalculateStintOutcomes:
             event_num: int
             event_type: int
             home_description: str | None = None
-            visitor_description: str | None = None
+            away_description: str | None = None
             score_home: int | None = None
             score_away: int | None = None
 
@@ -463,7 +472,7 @@ class TestCalculateStintOutcomes:
             event_num: int
             event_type: int
             home_description: str | None = None
-            visitor_description: str | None = None
+            away_description: str | None = None
             score_home: int | None = None
             score_away: int | None = None
 
@@ -487,7 +496,7 @@ class TestCalculateStintOutcomes:
             event_num: int
             event_type: int
             home_description: str | None = None
-            visitor_description: str | None = None
+            away_description: str | None = None
             score_home: int | None = None
             score_away: int | None = None
 
@@ -495,7 +504,7 @@ class TestCalculateStintOutcomes:
             MockPlay(
                 event_num=5,
                 event_type=EVENT_FIELD_GOAL_MADE,
-                visitor_description="Player makes 3PT shot",
+                away_description="Player makes 3PT shot",
             ),
         ]
 
@@ -511,7 +520,7 @@ class TestCalculateStintOutcomes:
             event_num: int
             event_type: int
             home_description: str | None = None
-            visitor_description: str | None = None
+            away_description: str | None = None
             score_home: int | None = None
             score_away: int | None = None
 
@@ -535,7 +544,7 @@ class TestCalculateStintOutcomes:
             event_num: int
             event_type: int
             home_description: str | None = None
-            visitor_description: str | None = None
+            away_description: str | None = None
             score_home: int | None = None
             score_away: int | None = None
 
@@ -569,21 +578,21 @@ class TestGetStartingLineups:
             period: int
             event_type: int
             player1_id: int | None
-            player1_team_id: int | None
+            team_id: int | None
             player2_id: int | None = None
 
         # Create plays with 5 players per team
         plays = [
-            MockPlay(event_num=1, period=1, event_type=1, player1_id=101, player1_team_id=1),
-            MockPlay(event_num=2, period=1, event_type=1, player1_id=102, player1_team_id=1),
-            MockPlay(event_num=3, period=1, event_type=1, player1_id=103, player1_team_id=1),
-            MockPlay(event_num=4, period=1, event_type=1, player1_id=104, player1_team_id=1),
-            MockPlay(event_num=5, period=1, event_type=1, player1_id=105, player1_team_id=1),
-            MockPlay(event_num=6, period=1, event_type=1, player1_id=201, player1_team_id=2),
-            MockPlay(event_num=7, period=1, event_type=1, player1_id=202, player1_team_id=2),
-            MockPlay(event_num=8, period=1, event_type=1, player1_id=203, player1_team_id=2),
-            MockPlay(event_num=9, period=1, event_type=1, player1_id=204, player1_team_id=2),
-            MockPlay(event_num=10, period=1, event_type=1, player1_id=205, player1_team_id=2),
+            MockPlay(event_num=1, period=1, event_type=1, player1_id=101, team_id=1),
+            MockPlay(event_num=2, period=1, event_type=1, player1_id=102, team_id=1),
+            MockPlay(event_num=3, period=1, event_type=1, player1_id=103, team_id=1),
+            MockPlay(event_num=4, period=1, event_type=1, player1_id=104, team_id=1),
+            MockPlay(event_num=5, period=1, event_type=1, player1_id=105, team_id=1),
+            MockPlay(event_num=6, period=1, event_type=1, player1_id=201, team_id=2),
+            MockPlay(event_num=7, period=1, event_type=1, player1_id=202, team_id=2),
+            MockPlay(event_num=8, period=1, event_type=1, player1_id=203, team_id=2),
+            MockPlay(event_num=9, period=1, event_type=1, player1_id=204, team_id=2),
+            MockPlay(event_num=10, period=1, event_type=1, player1_id=205, team_id=2),
         ]
 
         home_lineup, away_lineup = deriver._get_starting_lineups(plays, 1, 2)
@@ -611,9 +620,9 @@ class TestTrackSubstitutions:
             period: int
             event_type: int
             player1_id: int | None
-            player1_team_id: int | None
+            team_id: int | None
             player2_id: int | None = None
-            pc_time_string: str | None = "6:00"
+            pc_time: str | None = "6:00"
 
         plays = [
             MockPlay(
@@ -621,7 +630,7 @@ class TestTrackSubstitutions:
                 period=1,
                 event_type=EVENT_SUBSTITUTION,
                 player1_id=106,  # player entering
-                player1_team_id=1,
+                team_id=1,
                 player2_id=101,  # player leaving
             ),
         ]

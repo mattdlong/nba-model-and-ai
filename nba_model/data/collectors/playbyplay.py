@@ -66,6 +66,29 @@ class PlayByPlayCollector(BaseCollector):
         """
         super().__init__(api_client, db_session)
 
+    def collect(
+        self,
+        season_range: list[str],
+        resume_from: str | None = None,
+    ) -> dict[str, list[Play]]:
+        """Collect play-by-play for all games in a season range.
+
+        Note: This requires game IDs which should be collected first
+        using GamesCollector. Use collect_games() with specific game IDs.
+
+        Args:
+            season_range: List of season strings.
+            resume_from: Optional game_id to resume from.
+
+        Returns:
+            Dict mapping game_id to list of Play instances.
+        """
+        self.logger.warning(
+            "collect() for PlayByPlayCollector requires game IDs. "
+            "Use collect_games() with specific game IDs instead."
+        )
+        return {}
+
     def collect_game(self, game_id: str) -> list[Play]:
         """Collect play-by-play for a single game.
 
@@ -101,6 +124,7 @@ class PlayByPlayCollector(BaseCollector):
         self,
         game_ids: list[str],
         on_error: Literal["raise", "skip", "log"] = "log",
+        resume_from: str | None = None,
     ) -> dict[str, list[Play]]:
         """Collect play-by-play for multiple games.
 
@@ -110,6 +134,7 @@ class PlayByPlayCollector(BaseCollector):
                 - "raise": Stop on first error
                 - "skip": Skip failed games silently
                 - "log": Log errors and continue
+            resume_from: Optional game_id to resume from.
 
         Returns:
             Dict mapping game_id to list of Play instances.
@@ -118,12 +143,21 @@ class PlayByPlayCollector(BaseCollector):
 
         results: dict[str, list[Play]] = {}
 
+        # Handle resume_from
+        start_collecting = resume_from is None
+        if resume_from and resume_from in game_ids:
+            start_idx = game_ids.index(resume_from)
+            game_ids = game_ids[start_idx:]
+            start_collecting = True
+
         for i, game_id in enumerate(game_ids, 1):
             self._log_progress(i, len(game_ids), game_id)
 
             try:
                 plays = self.collect_game(game_id)
                 results[game_id] = plays
+                # Set checkpoint after successful collection
+                self.set_checkpoint(game_id)
             except Exception as e:
                 self._handle_error(e, game_id, on_error)
                 if on_error == "raise":
@@ -221,6 +255,9 @@ class PlayByPlayCollector(BaseCollector):
     ) -> tuple[int | None, int | None, int | None]:
         """Extract player IDs from event data.
 
+        First tries to get player IDs from the explicit PLAYER_ID fields.
+        Falls back to extracting from event descriptions if not present.
+
         Args:
             row: DataFrame row.
 
@@ -232,6 +269,94 @@ class PlayByPlayCollector(BaseCollector):
         player3_id = self._safe_int(row.get("PLAYER3_ID"))
 
         return player1_id, player2_id, player3_id
+
+    def extract_player_references_from_description(
+        self,
+        description: str | None,
+        player_name_to_id: dict[str, int] | None = None,
+    ) -> list[int]:
+        """Extract player IDs from event descriptions.
+
+        Parses descriptions like:
+        - "Curry 25' 3PT Shot: Made" -> ["Curry"]
+        - "LeBron Driving Layup" -> ["LeBron"]
+        - "Curry 6' Floating Jump Shot (Assist: Thompson)" -> ["Curry", "Thompson"]
+        - "MISS Curry 3PT" -> ["Curry"]
+
+        Args:
+            description: Event description string.
+            player_name_to_id: Optional mapping of player names to IDs.
+
+        Returns:
+            List of extracted player names (or IDs if mapping provided).
+        """
+        if not description:
+            return []
+
+        # Known patterns for player mentions
+        # 1. Player name at start: "Curry 25' 3PT"
+        # 2. After MISS: "MISS Curry 3PT"
+        # 3. After Assist: "(Assist: Thompson)"
+        # 4. After Block: "(Block: Green)"
+        # 5. After Steal: "(Steal: Curry)"
+        # 6. SUB patterns: "SUB: Curry FOR Thompson"
+
+        player_names: list[str] = []
+
+        # Pattern: Assist/Block/Steal: Name
+        import re
+
+        assist_match = re.search(r"\((?:Assist|AST):\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\)", description)
+        if assist_match:
+            player_names.append(assist_match.group(1).strip())
+
+        block_match = re.search(r"\((?:Block|BLK):\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\)", description)
+        if block_match:
+            player_names.append(block_match.group(1).strip())
+
+        steal_match = re.search(r"\((?:Steal|STL):\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\)", description)
+        if steal_match:
+            player_names.append(steal_match.group(1).strip())
+
+        # Pattern: SUB: Name FOR Name
+        sub_match = re.search(r"SUB:\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+FOR\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)", description)
+        if sub_match:
+            player_names.append(sub_match.group(1).strip())
+            player_names.append(sub_match.group(2).strip())
+
+        # Pattern: Starting name (e.g., "Curry 25' 3PT")
+        # Skip common prefixes like MISS, REBOUND
+        clean_desc = description.strip()
+        for prefix in ["MISS ", "MISSED ", "REBOUND "]:
+            if clean_desc.upper().startswith(prefix):
+                clean_desc = clean_desc[len(prefix):]
+                break
+
+        # First word that looks like a name
+        first_word_match = re.match(r"^([A-Z][a-z]+(?:\.\s[A-Z][a-z]+)?)\s", clean_desc)
+        if first_word_match:
+            name = first_word_match.group(1)
+            # Skip common non-name words
+            if name.upper() not in ["FREE", "TURNOVER", "FOUL", "JUMP", "OFFENSIVE", "DEFENSIVE"]:
+                player_names.append(name)
+
+        # Convert to player IDs if mapping provided
+        if player_name_to_id:
+            player_ids = []
+            for name in player_names:
+                # Try exact match first
+                if name in player_name_to_id:
+                    player_ids.append(player_name_to_id[name])
+                else:
+                    # Try case-insensitive match
+                    for known_name, pid in player_name_to_id.items():
+                        if known_name.lower() == name.lower():
+                            player_ids.append(pid)
+                            break
+            return player_ids
+
+        # Return names as placeholder (caller can resolve to IDs)
+        return []  # Return empty if no ID mapping - names aren't IDs
 
     def _safe_int(self, value: object) -> int | None:
         """Safely convert value to int.

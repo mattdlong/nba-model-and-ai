@@ -325,3 +325,166 @@ class TestTransformPlayEdgeCases:
         assert play is not None
         assert play.score_home is None
         assert play.score_away is None
+
+
+class TestPlayerReferenceExtraction:
+    """Tests for player reference extraction from event descriptions."""
+
+    def test_extract_empty_description(
+        self,
+        pbp_collector: PlayByPlayCollector,
+    ) -> None:
+        """Should return empty list for empty description."""
+        result = pbp_collector.extract_player_references_from_description(None)
+        assert result == []
+
+        result = pbp_collector.extract_player_references_from_description("")
+        assert result == []
+
+    def test_extract_assist_pattern(
+        self,
+        pbp_collector: PlayByPlayCollector,
+    ) -> None:
+        """Should extract player name from assist pattern."""
+        # Without ID mapping, returns empty (names aren't IDs)
+        result = pbp_collector.extract_player_references_from_description(
+            "Curry 25' 3PT Shot (Assist: Thompson)"
+        )
+        assert result == []  # No ID mapping provided
+
+    def test_extract_with_player_mapping(
+        self,
+        pbp_collector: PlayByPlayCollector,
+    ) -> None:
+        """Should extract player IDs when mapping is provided."""
+        player_map = {
+            "Curry": 201939,
+            "Thompson": 201566,
+        }
+        result = pbp_collector.extract_player_references_from_description(
+            "Curry 25' 3PT Shot (Assist: Thompson)",
+            player_name_to_id=player_map,
+        )
+        assert 201566 in result  # Thompson from assist
+        assert 201939 in result  # Curry from start
+
+    def test_extract_block_pattern(
+        self,
+        pbp_collector: PlayByPlayCollector,
+    ) -> None:
+        """Should extract player name from block pattern."""
+        player_map = {"Green": 203110}
+        result = pbp_collector.extract_player_references_from_description(
+            "MISS James Layup (Block: Green)",
+            player_name_to_id=player_map,
+        )
+        assert 203110 in result
+
+    def test_extract_steal_pattern(
+        self,
+        pbp_collector: PlayByPlayCollector,
+    ) -> None:
+        """Should extract player name from steal pattern."""
+        player_map = {"Curry": 201939}
+        result = pbp_collector.extract_player_references_from_description(
+            "James Turnover (Steal: Curry)",
+            player_name_to_id=player_map,
+        )
+        assert 201939 in result
+
+    def test_extract_substitution_pattern(
+        self,
+        pbp_collector: PlayByPlayCollector,
+    ) -> None:
+        """Should extract both player names from substitution pattern."""
+        player_map = {
+            "Poole": 1629673,
+            "Thompson": 201566,
+        }
+        result = pbp_collector.extract_player_references_from_description(
+            "SUB: Poole FOR Thompson",
+            player_name_to_id=player_map,
+        )
+        assert 1629673 in result
+        assert 201566 in result
+
+    def test_extract_case_insensitive_match(
+        self,
+        pbp_collector: PlayByPlayCollector,
+    ) -> None:
+        """Should match player names case-insensitively."""
+        player_map = {"curry": 201939}  # lowercase
+        result = pbp_collector.extract_player_references_from_description(
+            "(Assist: Curry)",  # Title case
+            player_name_to_id=player_map,
+        )
+        assert 201939 in result
+
+    def test_extract_starting_player_name(
+        self,
+        pbp_collector: PlayByPlayCollector,
+    ) -> None:
+        """Should extract player name at start of description."""
+        player_map = {"Curry": 201939}
+        result = pbp_collector.extract_player_references_from_description(
+            "Curry 25' 3PT Shot: Made",
+            player_name_to_id=player_map,
+        )
+        assert 201939 in result
+
+    def test_extract_after_miss_prefix(
+        self,
+        pbp_collector: PlayByPlayCollector,
+    ) -> None:
+        """Should extract player name after MISS prefix."""
+        player_map = {"James": 2544}
+        result = pbp_collector.extract_player_references_from_description(
+            "MISS James 3PT Shot",
+            player_name_to_id=player_map,
+        )
+        assert 2544 in result
+
+    def test_skip_non_name_words(
+        self,
+        pbp_collector: PlayByPlayCollector,
+    ) -> None:
+        """Should skip common non-name words."""
+        player_map = {"Turnover": 99999}  # Shouldn't match
+        result = pbp_collector.extract_player_references_from_description(
+            "Turnover: Bad Pass",
+            player_name_to_id=player_map,
+        )
+        assert 99999 not in result
+
+
+class TestCollectorCheckpointing:
+    """Tests for collector checkpointing functionality."""
+
+    def test_get_last_checkpoint_initially_none(
+        self,
+        pbp_collector: PlayByPlayCollector,
+    ) -> None:
+        """Checkpoint should be None initially."""
+        assert pbp_collector.get_last_checkpoint() is None
+
+    def test_set_and_get_checkpoint(
+        self,
+        pbp_collector: PlayByPlayCollector,
+    ) -> None:
+        """Should set and retrieve checkpoint."""
+        pbp_collector.set_checkpoint("0022300001")
+        assert pbp_collector.get_last_checkpoint() == "0022300001"
+
+    def test_checkpoint_updated_on_collect_games(
+        self,
+        pbp_collector: PlayByPlayCollector,
+        mock_api_client: MagicMock,
+        sample_pbp_df: pd.DataFrame,
+    ) -> None:
+        """Checkpoint should be updated after successful collection."""
+        mock_api_client.get_play_by_play.return_value = sample_pbp_df
+
+        pbp_collector.collect_games(["001", "002"])
+
+        # Checkpoint should be the last processed game
+        assert pbp_collector.get_last_checkpoint() == "002"

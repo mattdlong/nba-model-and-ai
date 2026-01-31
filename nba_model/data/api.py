@@ -136,6 +136,7 @@ class NBAApiClient:
             NBAApiTimeoutError: If request times out after retries.
         """
         last_error: Exception | None = None
+        last_was_rate_limit = False
 
         for attempt in range(self.max_retries + 1):
             self._apply_rate_limit()
@@ -153,6 +154,7 @@ class NBAApiClient:
 
             except ReadTimeout as e:
                 last_error = e
+                last_was_rate_limit = False
                 logger.warning(
                     f"Request timeout for {endpoint_class.__name__} "
                     f"(attempt {attempt + 1})"
@@ -165,6 +167,7 @@ class NBAApiClient:
 
             except RequestException as e:
                 last_error = e
+                last_was_rate_limit = False
                 # Check for specific status codes
                 status_code = getattr(e.response, "status_code", None) if hasattr(e, "response") else None
 
@@ -183,6 +186,7 @@ class NBAApiClient:
                     ) from e
 
                 if status_code == 429:
+                    last_was_rate_limit = True
                     logger.warning(
                         f"Rate limit hit for {endpoint_class.__name__} "
                         f"(attempt {attempt + 1})"
@@ -213,6 +217,7 @@ class NBAApiClient:
 
             except Exception as e:
                 last_error = e
+                last_was_rate_limit = False
                 logger.error(f"Unexpected error for {endpoint_class.__name__}: {e}")
                 if attempt < self.max_retries:
                     backoff = 2**attempt
@@ -223,6 +228,11 @@ class NBAApiClient:
         if isinstance(last_error, ReadTimeout):
             raise NBAApiTimeoutError(
                 f"Request timeout after {self.max_retries + 1} attempts"
+            ) from last_error
+
+        if last_was_rate_limit:
+            raise NBAApiRateLimitError(
+                f"Rate limit exceeded after {self.max_retries + 1} attempts"
             ) from last_error
 
         raise NBAApiError(

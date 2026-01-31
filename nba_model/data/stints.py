@@ -76,24 +76,30 @@ class StintData:
 
     Attributes:
         game_id: Game ID.
-        team_id: Team ID.
-        lineup: Sorted list of 5 player IDs.
+        period: Game period (1-4 for regulation, 5+ for OT).
+        home_lineup: Sorted list of 5 home team player IDs.
+        away_lineup: Sorted list of 5 away team player IDs.
         start_event_num: Event number at stint start.
         end_event_num: Event number at stint end.
         start_time: Start time in game seconds.
         end_time: End time in game seconds.
+        start_time_str: Start time as "MM:SS" string.
+        end_time_str: End time as "MM:SS" string.
         home_points: Points scored by home team during stint.
         away_points: Points scored by away team during stint.
         possessions: Estimated possessions during stint.
     """
 
     game_id: str
-    team_id: int
-    lineup: list[int]
+    period: int
+    home_lineup: list[int]
+    away_lineup: list[int]
     start_event_num: int
     end_event_num: int
     start_time: int
     end_time: int
+    start_time_str: str = "0:00"
+    end_time_str: str = "0:00"
     home_points: int = 0
     away_points: int = 0
     possessions: float = 0.0
@@ -187,12 +193,15 @@ class StintDeriver:
         # Convert to Stint model objects
         stints = []
         for sd in stint_data_list:
+            duration_seconds = sd.end_time - sd.start_time
             stint = Stint(
                 game_id=sd.game_id,
-                team_id=sd.team_id,
-                lineup_json=self._lineup_to_json(sd.lineup),
-                start_time=sd.start_time,
-                end_time=sd.end_time,
+                period=sd.period,
+                start_time=sd.start_time_str,
+                end_time=sd.end_time_str,
+                duration_seconds=duration_seconds,
+                home_lineup=self._lineup_to_json(sd.home_lineup),
+                away_lineup=self._lineup_to_json(sd.away_lineup),
                 home_points=sd.home_points,
                 away_points=sd.away_points,
                 possessions=sd.possessions,
@@ -217,8 +226,8 @@ class StintDeriver:
         team_ids: set[int] = set()
 
         for play in plays:
-            if play.player1_team_id and play.player1_team_id != 0:
-                team_ids.add(play.player1_team_id)
+            if play.team_id and play.team_id != 0:
+                team_ids.add(play.team_id)
 
             if len(team_ids) >= 2:
                 break
@@ -261,10 +270,10 @@ class StintDeriver:
 
             # Check player1
             if play.player1_id and play.player1_id != 0:
-                if play.player1_team_id == home_team_id:
+                if play.team_id == home_team_id:
                     if play.player1_id not in home_players:
                         home_players.append(play.player1_id)
-                elif play.player1_team_id == away_team_id:
+                elif play.team_id == away_team_id:
                     if play.player1_id not in away_players:
                         away_players.append(play.player1_id)
 
@@ -282,10 +291,10 @@ class StintDeriver:
                 if play.event_type == EVENT_JUMP_BALL and play.period == 1:
                     # Jump ball involves players from both teams
                     if play.player1_id and play.player1_id != 0:
-                        if play.player1_team_id == home_team_id:
+                        if play.team_id == home_team_id:
                             if play.player1_id not in home_players:
                                 home_players.append(play.player1_id)
-                        elif play.player1_team_id == away_team_id:
+                        elif play.team_id == away_team_id:
                             if play.player1_id not in away_players:
                                 away_players.append(play.player1_id)
 
@@ -326,18 +335,18 @@ class StintDeriver:
                 # player1 = player entering, player2 = player leaving
                 player_in = play.player1_id
                 player_out = play.player2_id
-                team_id = play.player1_team_id
+                sub_team_id = play.team_id
 
-                if player_in and player_out and team_id:
+                if player_in and player_out and sub_team_id:
                     game_seconds = self._parse_time_to_seconds(
-                        play.period, play.pc_time_string or "0:00"
+                        play.period, play.pc_time or "0:00"
                     )
 
                     change = LineupChange(
                         event_num=play.event_num,
                         period=play.period,
-                        pc_time=play.pc_time_string or "0:00",
-                        team_id=team_id,
+                        pc_time=play.pc_time or "0:00",
+                        team_id=sub_team_id,
                         player_in=player_in,
                         player_out=player_out,
                         game_seconds=game_seconds,
@@ -358,6 +367,9 @@ class StintDeriver:
     ) -> list[StintData]:
         """Build stint data from lineup changes.
 
+        A stint is a period where BOTH lineups remain unchanged.
+        Creates paired stints with both home and away lineups.
+
         Args:
             plays: List of Play objects.
             home_lineup: Starting home lineup.
@@ -377,10 +389,10 @@ class StintDeriver:
         current_away = away_lineup.copy()
 
         # Track stint boundaries
-        home_stint_start = 0  # Game seconds
-        away_stint_start = 0
-        home_start_event = plays[0].event_num if plays else 0
-        away_start_event = plays[0].event_num if plays else 0
+        stint_start = 0  # Game seconds
+        stint_start_event = plays[0].event_num if plays else 0
+        stint_period = 1
+        stint_start_time_str = "12:00"
 
         # Group changes by game_seconds to handle simultaneous subs
         changes_by_time: dict[int, list[LineupChange]] = {}
@@ -393,101 +405,73 @@ class StintDeriver:
         for game_seconds in sorted(changes_by_time.keys()):
             time_changes = changes_by_time[game_seconds]
 
-            # Process home team changes
-            home_changes = [c for c in time_changes if c.team_id == home_team_id]
-            if home_changes:
-                # End current home stint
-                end_event = home_changes[0].event_num
-                stint = self._create_stint_data(
-                    plays,
-                    game_id,
-                    home_team_id,
-                    current_home,
-                    home_start_event,
-                    end_event,
-                    home_stint_start,
-                    game_seconds,
-                )
-                if stint:
-                    stints.append(stint)
+            # End current stint before applying changes
+            end_event = time_changes[0].event_num
+            end_period = time_changes[0].period
+            end_time_str = time_changes[0].pc_time
 
-                # Apply all home substitutions
-                for change in home_changes:
+            stint = self._create_stint_data(
+                plays,
+                game_id,
+                stint_period,
+                current_home.copy(),
+                current_away.copy(),
+                stint_start_event,
+                end_event,
+                stint_start,
+                game_seconds,
+                stint_start_time_str,
+                end_time_str,
+            )
+            if stint:
+                stints.append(stint)
+
+            # Apply all substitutions (both teams)
+            for change in time_changes:
+                if change.team_id == home_team_id:
                     if change.player_out in current_home:
                         current_home.remove(change.player_out)
                     if change.player_in not in current_home:
                         current_home.append(change.player_in)
-                current_home = sorted(current_home)
-
-                # Start new stint
-                home_stint_start = game_seconds
-                home_start_event = end_event
-
-            # Process away team changes
-            away_changes = [c for c in time_changes if c.team_id == away_team_id]
-            if away_changes:
-                # End current away stint
-                end_event = away_changes[0].event_num
-                stint = self._create_stint_data(
-                    plays,
-                    game_id,
-                    away_team_id,
-                    current_away,
-                    away_start_event,
-                    end_event,
-                    away_stint_start,
-                    game_seconds,
-                )
-                if stint:
-                    stints.append(stint)
-
-                # Apply all away substitutions
-                for change in away_changes:
+                elif change.team_id == away_team_id:
                     if change.player_out in current_away:
                         current_away.remove(change.player_out)
                     if change.player_in not in current_away:
                         current_away.append(change.player_in)
-                current_away = sorted(current_away)
 
-                # Start new stint
-                away_stint_start = game_seconds
-                away_start_event = end_event
+            current_home = sorted(current_home)
+            current_away = sorted(current_away)
 
-        # Final stints at game end
+            # Start new stint
+            stint_start = game_seconds
+            stint_start_event = end_event
+            stint_period = end_period
+            stint_start_time_str = end_time_str
+
+        # Final stint at game end
         if plays:
             last_play = plays[-1]
             game_end_seconds = self._parse_time_to_seconds(
-                last_play.period, last_play.pc_time_string or "0:00"
+                last_play.period, last_play.pc_time or "0:00"
             )
             end_event = last_play.event_num
+            end_time_str = last_play.pc_time or "0:00"
 
-            # Final home stint
-            home_stint = self._create_stint_data(
+            final_stint = self._create_stint_data(
                 plays,
                 game_id,
-                home_team_id,
+                stint_period,
                 current_home,
-                home_start_event,
-                end_event,
-                home_stint_start,
-                game_end_seconds,
-            )
-            if home_stint:
-                stints.append(home_stint)
-
-            # Final away stint
-            away_stint = self._create_stint_data(
-                plays,
-                game_id,
-                away_team_id,
                 current_away,
-                away_start_event,
+                stint_start_event,
                 end_event,
-                away_stint_start,
+                stint_start,
                 game_end_seconds,
+                stint_start_time_str,
+                end_time_str,
             )
-            if away_stint:
-                stints.append(away_stint)
+            if final_stint:
+                stints.append(final_stint)
 
         return stints
 
@@ -495,24 +479,30 @@ class StintDeriver:
         self,
         plays: list,
         game_id: str,
-        team_id: int,
-        lineup: list[int],
+        period: int,
+        home_lineup: list[int],
+        away_lineup: list[int],
         start_event: int,
         end_event: int,
         start_time: int,
         end_time: int,
+        start_time_str: str,
+        end_time_str: str,
     ) -> StintData | None:
-        """Create a stint data object.
+        """Create a stint data object with paired home/away lineups.
 
         Args:
             plays: List of Play objects.
             game_id: Game ID.
-            team_id: Team ID.
-            lineup: List of 5 player IDs.
+            period: Game period.
+            home_lineup: List of 5 home player IDs.
+            away_lineup: List of 5 away player IDs.
             start_event: Starting event number.
             end_event: Ending event number.
             start_time: Start time in game seconds.
             end_time: End time in game seconds.
+            start_time_str: Start time as "MM:SS" string.
+            end_time_str: End time as "MM:SS" string.
 
         Returns:
             StintData object or None if invalid.
@@ -522,7 +512,7 @@ class StintDeriver:
             return None
 
         # Skip incomplete lineups
-        if len(lineup) != 5:
+        if len(home_lineup) != 5 or len(away_lineup) != 5:
             return None
 
         # Calculate outcomes
@@ -532,12 +522,15 @@ class StintDeriver:
 
         return StintData(
             game_id=game_id,
-            team_id=team_id,
-            lineup=sorted(lineup),
+            period=period,
+            home_lineup=sorted(home_lineup),
+            away_lineup=sorted(away_lineup),
             start_event_num=start_event,
             end_event_num=end_event,
             start_time=start_time,
             end_time=end_time,
+            start_time_str=start_time_str,
+            end_time_str=end_time_str,
             home_points=home_pts,
             away_points=away_pts,
             possessions=poss,
@@ -577,7 +570,7 @@ class StintDeriver:
             if play.event_type == EVENT_FIELD_GOAL_MADE:
                 # Determine points (2 or 3)
                 pts = 2
-                desc = (play.home_description or "") + (play.visitor_description or "")
+                desc = (play.home_description or "") + (play.away_description or "")
                 if "3PT" in desc.upper():
                     pts = 3
 
@@ -590,7 +583,7 @@ class StintDeriver:
 
             # Count made free throws
             if play.event_type == EVENT_FREE_THROW:
-                desc = (play.home_description or "") + (play.visitor_description or "")
+                desc = (play.home_description or "") + (play.away_description or "")
                 if "MISS" not in desc.upper():
                     if play.home_description:
                         home_points += 1
@@ -645,7 +638,7 @@ class StintDeriver:
                 ft_attempts += 1
             elif play.event_type == EVENT_REBOUND:
                 # Check if offensive rebound
-                desc = (play.home_description or "") + (play.visitor_description or "")
+                desc = (play.home_description or "") + (play.away_description or "")
                 if "OFF" in desc.upper():
                     offensive_rebounds += 1
 

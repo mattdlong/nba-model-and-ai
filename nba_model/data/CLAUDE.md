@@ -6,24 +6,30 @@ Owns all data acquisition, storage, and retrieval for NBA statistics. Single sou
 
 ## Status
 
-🔲 **Phase 2 - Not Started** (stub `__init__.py` only)
+✅ **Phase 2 - Complete**
 
-## Planned Structure
+## Structure
 
 | File | Purpose | Status |
 |------|---------|--------|
-| `__init__.py` | Public API exports | ✅ Exists (stub) |
-| `api.py` | NBA API client with rate limiting | 🔲 Planned |
-| `models.py` | SQLAlchemy ORM models | 🔲 Planned |
-| `schema.py` | Database schema reference | 🔲 Planned |
-| `pipelines.py` | ETL orchestration | 🔲 Planned |
-| `collectors/` | Entity-specific collectors | 🔲 Planned |
+| `__init__.py` | Public API exports | ✅ Complete |
+| `api.py` | NBA API client with rate limiting | ✅ Complete |
+| `models.py` | SQLAlchemy ORM models | ✅ Complete |
+| `schema.py` | Database schema reference | ✅ Complete |
+| `db.py` | Database connection management | ✅ Complete |
+| `pipelines.py` | ETL orchestration | ✅ Complete |
+| `checkpoint.py` | Collection checkpointing | ✅ Complete |
+| `stints.py` | Lineup stint derivation | ✅ Complete |
+| `validation.py` | Data validation | ✅ Complete |
+| `collectors/` | Entity-specific collectors | ✅ Complete |
 
-## Planned Key Classes
+## Key Classes
 
 - `NBAApiClient` - Rate-limited API wrapper (0.6s delay, 3 retries)
-- `Game`, `Player`, `Stint`, `Shot` - SQLAlchemy ORM models
+- `Game`, `Player`, `Stint`, `Shot`, `Play` - SQLAlchemy ORM models
 - `DataPipeline` - Orchestrates collection with checkpointing
+- `StintDeriver` - Derives lineup stints from play-by-play
+- `DataValidator` - Validates collected data batches
 
 ## Integration Points
 

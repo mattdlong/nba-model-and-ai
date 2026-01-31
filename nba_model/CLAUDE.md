@@ -18,7 +18,7 @@ Core package containing all production code for the NBA prediction system. Provi
 
 | Subpackage | Phase | Status | Responsibility |
 |------------|-------|--------|---------------|
-| `data/` | 2 | Stub | Data collection, storage, ETL |
+| `data/` | 2 | ✅ Complete | Data collection, storage, ETL |
 | `features/` | 3 | Stub | Feature engineering (RAPM, spatial) |
 | `models/` | 4 | Stub | ML models (Transformer, GNN, Fusion) |
 | `backtest/` | 5 | Stub | Backtesting, Kelly sizing, devigging |

@@ -244,3 +244,209 @@ class TestPlayerCollectorErrorHandling:
 
         assert len(players) == 1
         assert players[0].birth_date is not None
+
+    def test_roster_api_error_continues(
+        self,
+        players_collector: PlayersCollector,
+        mock_api_client: MagicMock,
+        sample_roster_df: pd.DataFrame,
+    ) -> None:
+        """Should continue after API error for one team."""
+        # First team fails, second succeeds
+        mock_api_client.get_team_roster.side_effect = [
+            Exception("API error"),
+            sample_roster_df,
+        ]
+
+        players, player_seasons = players_collector.collect_rosters(
+            season="2023-24",
+            team_ids=[100, 1610612738],
+        )
+
+        # Should have players from second team
+        assert len(players) == 2
+
+
+class TestCollectGameMethod:
+    """Tests for collect_game method."""
+
+    def test_collect_game_returns_empty_with_warning(
+        self,
+        players_collector: PlayersCollector,
+    ) -> None:
+        """collect_game is not supported for players, returns empty."""
+        players = players_collector.collect_game("0022300001")
+        assert players == []
+
+
+class TestCollectRostersAllTeams:
+    """Tests for collecting rosters with default team list."""
+
+    def test_collect_rosters_defaults_to_all_teams(
+        self,
+        players_collector: PlayersCollector,
+        mock_api_client: MagicMock,
+    ) -> None:
+        """Should collect from all 30 teams when team_ids is None."""
+        mock_api_client.get_team_roster.return_value = pd.DataFrame({
+            "TeamID": [1],
+            "SEASON": ["2023-24"],
+            "PLAYER": ["Test"],
+            "PLAYER_ID": [1],
+            "NUM": ["1"],
+            "POSITION": ["G"],
+            "HEIGHT": ["6-0"],
+            "WEIGHT": ["180"],
+            "BIRTH_DATE": [None],
+        })
+
+        players_collector.collect_rosters(season="2023-24", team_ids=None)
+
+        # Should call API for all 30 teams
+        assert mock_api_client.get_team_roster.call_count == 30
+
+
+class TestPlayerDetailsEdgeCases:
+    """Tests for edge cases in player details collection."""
+
+    def test_collect_player_details_handles_undrafted(
+        self,
+        players_collector: PlayersCollector,
+        mock_api_client: MagicMock,
+    ) -> None:
+        """Should handle undrafted players."""
+        df = pd.DataFrame({
+            "DISPLAY_FIRST_LAST": ["Undrafted Player"],
+            "BIRTHDATE": ["1990-01-01T00:00:00"],
+            "HEIGHT": ["6-2"],
+            "WEIGHT": ["180"],
+            "DRAFT_YEAR": ["Undrafted"],
+            "DRAFT_ROUND": ["Undrafted"],
+            "DRAFT_NUMBER": ["Undrafted"],
+        })
+        mock_api_client.get_player_info.return_value = df
+
+        player = players_collector.collect_player_details(12345)
+
+        assert player is not None
+        assert player.draft_year is None
+        assert player.draft_round is None
+        assert player.draft_number is None
+
+    def test_collect_player_details_handles_api_error(
+        self,
+        players_collector: PlayersCollector,
+        mock_api_client: MagicMock,
+    ) -> None:
+        """Should return None on API error."""
+        mock_api_client.get_player_info.side_effect = Exception("API error")
+
+        player = players_collector.collect_player_details(12345)
+
+        assert player is None
+
+    def test_collect_player_details_handles_missing_height(
+        self,
+        players_collector: PlayersCollector,
+        mock_api_client: MagicMock,
+    ) -> None:
+        """Should handle missing height format."""
+        df = pd.DataFrame({
+            "DISPLAY_FIRST_LAST": ["Player"],
+            "BIRTHDATE": [None],
+            "HEIGHT": ["Unknown"],  # Invalid format
+            "WEIGHT": [None],
+            "DRAFT_YEAR": [None],
+            "DRAFT_ROUND": [None],
+            "DRAFT_NUMBER": [None],
+        })
+        mock_api_client.get_player_info.return_value = df
+
+        player = players_collector.collect_player_details(12345)
+
+        assert player is not None
+        assert player.height_inches is None
+
+
+class TestTransformPlayerEdgeCases:
+    """Tests for edge cases in player transformation."""
+
+    def test_transform_player_handles_missing_weight(
+        self,
+        players_collector: PlayersCollector,
+    ) -> None:
+        """Should handle missing weight."""
+        import numpy as np
+
+        row = pd.Series({
+            "PLAYER_ID": 12345,
+            "PLAYER": "Test Player",
+            "HEIGHT": "6-2",
+            "WEIGHT": np.nan,
+            "BIRTH_DATE": None,
+        })
+
+        player = players_collector._transform_player(row)
+
+        assert player is not None
+        assert player.weight_lbs is None
+
+    def test_transform_player_handles_invalid_height_format(
+        self,
+        players_collector: PlayersCollector,
+    ) -> None:
+        """Should handle invalid height format."""
+        row = pd.Series({
+            "PLAYER_ID": 12345,
+            "PLAYER": "Test Player",
+            "HEIGHT": "invalid",  # No dash
+            "WEIGHT": "180",
+            "BIRTH_DATE": None,
+        })
+
+        player = players_collector._transform_player(row)
+
+        assert player is not None
+        assert player.height_inches is None
+
+    def test_transform_player_handles_transform_error(
+        self,
+        players_collector: PlayersCollector,
+    ) -> None:
+        """Should return None on transform error."""
+        row = pd.Series({
+            # Missing PLAYER_ID causes error
+            "PLAYER": "Test Player",
+        })
+
+        player = players_collector._transform_player(row)
+
+        assert player is None
+
+    def test_transform_player_season_handles_empty_values(
+        self,
+        players_collector: PlayersCollector,
+    ) -> None:
+        """Should handle empty position and jersey number."""
+        row = pd.Series({
+            "PLAYER_ID": 12345,
+            "POSITION": "",
+            "NUM": "",
+        })
+
+        ps = players_collector._transform_player_season(row, "2023-24", 100)
+
+        assert ps is not None
+        assert ps.position is None  # Empty string becomes None
+        assert ps.jersey_number is None
+
+    def test_transform_player_season_handles_error(
+        self,
+        players_collector: PlayersCollector,
+    ) -> None:
+        """Should return None on transform error."""
+        row = pd.Series({})  # Missing required fields
+
+        ps = players_collector._transform_player_season(row, "2023-24", 100)
+
+        assert ps is None

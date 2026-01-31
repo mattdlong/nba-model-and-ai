@@ -28,11 +28,13 @@ class BaseCollector(ABC):
     - API client and session injection
     - Progress logging
     - Error handling with configurable strategies
+    - Checkpointing for resumable collection
 
     Attributes:
         api: NBA API client instance.
         session: SQLAlchemy database session.
         logger: Logger instance for this collector.
+        _last_checkpoint: Last successfully processed identifier.
     """
 
     def __init__(
@@ -49,6 +51,7 @@ class BaseCollector(ABC):
         self.api = api_client
         self.session = db_session
         self.logger = logging.getLogger(self.__class__.__name__)
+        self._last_checkpoint: str | None = None
 
     @abstractmethod
     def collect_game(self, game_id: str) -> Any:
@@ -61,6 +64,51 @@ class BaseCollector(ABC):
             Collected data (type depends on collector).
         """
         pass
+
+    def collect(
+        self,
+        season_range: list[str],
+        resume_from: str | None = None,
+    ) -> Any:
+        """Collect data for a range of seasons.
+
+        This is the primary collection method that supports checkpointing
+        and resumption from a specific point.
+
+        Args:
+            season_range: List of season strings (e.g., ["2022-23", "2023-24"]).
+            resume_from: Optional identifier to resume from (e.g., game_id).
+
+        Returns:
+            Collected data (type depends on collector).
+
+        Note:
+            Subclasses should override this method to implement
+            season-based collection logic.
+        """
+        self.logger.warning(
+            f"collect() not implemented for {self.__class__.__name__}. "
+            "Use collector-specific methods instead."
+        )
+        return []
+
+    def get_last_checkpoint(self) -> str | None:
+        """Get the last successfully processed identifier.
+
+        Returns:
+            The last checkpoint identifier (e.g., game_id) or None if
+            no checkpoint has been set.
+        """
+        return self._last_checkpoint
+
+    def set_checkpoint(self, checkpoint: str) -> None:
+        """Set the current checkpoint.
+
+        Args:
+            checkpoint: Identifier of the last successfully processed item.
+        """
+        self._last_checkpoint = checkpoint
+        self.logger.debug(f"Checkpoint set: {checkpoint}")
 
     def _log_progress(
         self,

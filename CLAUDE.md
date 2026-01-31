@@ -25,7 +25,7 @@ A Python CLI application that predicts NBA game outcomes using machine learning 
 | Phase | Name | Status | Completion |
 |-------|------|--------|------------|
 | 1 | Project Foundation | ✅ Complete | 100% |
-| 2 | Data Collection | 🔲 Not Started | 0% |
+| 2 | Data Collection | ✅ Complete | 100% |
 | 3 | Feature Engineering | 🔲 Not Started | 0% |
 | 4 | Model Architecture | 🔲 Not Started | 0% |
 | 5 | Backtesting Engine | 🔲 Not Started | 0% |

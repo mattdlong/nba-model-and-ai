@@ -44,6 +44,41 @@ class GamesCollector(BaseCollector):
         """
         super().__init__(api_client, db_session)
 
+    def collect(
+        self,
+        season_range: list[str],
+        resume_from: str | None = None,
+    ) -> list[Game]:
+        """Collect games for a range of seasons.
+
+        Args:
+            season_range: List of season strings (e.g., ["2022-23", "2023-24"]).
+            resume_from: Optional season to resume from.
+
+        Returns:
+            List of Game model instances.
+        """
+        all_games: list[Game] = []
+
+        # Determine starting point
+        start_collecting = resume_from is None
+
+        for season in season_range:
+            if not start_collecting:
+                if season == resume_from:
+                    start_collecting = True
+                else:
+                    continue
+
+            self.logger.info(f"Collecting games for season {season}")
+            games = self.collect_season(season)
+            all_games.extend(games)
+
+            # Set checkpoint after successful season collection
+            self.set_checkpoint(season)
+
+        return all_games
+
     def collect_game(self, game_id: str) -> list[Game]:
         """Collect data for a single game.
 
