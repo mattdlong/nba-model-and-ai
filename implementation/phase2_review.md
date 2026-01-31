@@ -3,66 +3,69 @@
 Date: 2026-01-31
 
 ## Scope Reviewed
-- Plans: `plan/implementation_plan.md`, `plan/phase2.md`, `plan/phase2a.md`, `plan/phase2b.md`, `plan/phase2c.md`
+- Plans: `plan/implementation_plan.md`, `plan/phase2.md`
 - Guidelines: `DEVELOPMENT_GUIDELINES.md`
 - Summaries: `implementation/phase2a_summary.md`, `implementation/phase2b_summary.md`, `implementation/phase2c_summary.md`
 - Code: `nba_model/data/*`, `nba_model/cli.py`, tests under `tests/`
 - Commits: last 3 commits from `git log -3 --stat`
 
 ## Requirements Compliance Checklist
-- [PASS] Phase 2a schema and ORM models implemented with relationships and constraints.
-- [PASS] Indexes and unique constraints present for key entities (games, plays, shots, stats, stints).
-- [PARTIAL] NBA API wrapper implements rate limiting, retry logic, and endpoint coverage; rate-limit specific exception is defined but never raised.
-- [PARTIAL] Collectors implemented for games/players/play-by-play/shots/boxscores, but collector interfaces do not match the spec (`collect(...)`, `get_last_checkpoint(...)`) and player references are not parsed from event descriptions.
-- [PASS] ETL pipeline orchestration, checkpointing, batch processing, and CLI data commands are implemented.
-- [FAIL] Stint derivation does not align with ORM schema or play-by-play model fields; will fail at runtime.
-- [FAIL] Integration tests required by Phase 2c are missing (only unit tests exist).
-- [PARTIAL] Coverage target of 75% is met overall, but Phase 2a/2b 90% coverage requirements are not met for schema/collector modules.
-- [FAIL] CLAUDE.md accuracy: core docs still claim Phase 2 not started/stubbed.
+- [PASS] Phase 2a schema and ORM models implemented with relationships, unique constraints, and required entities.
+- [PASS] Indexes present on key columns (game_date, season_id, game_id, player_id) and core lookup paths.
+- [PARTIAL] Lineup arrays are JSON strings but stored in `String(100)` rather than TEXT columns as specified.
+- [PASS] NBA API wrapper provides rate limiting, retry/backoff, and structured error handling.
+- [PARTIAL] API endpoint coverage matches required endpoints, but player tracking uses `BoxScorePlayerTrackV3` instead of the specified `boxscoreplayertrackv2`.
+- [PASS] Collectors implemented for games, players, play-by-play, shots, and box scores with per-entity transforms.
+- [PARTIAL] Collector interface spec (`collect(season_range, resume_from)`, `get_last_checkpoint`) is only implemented for some collectors; players/shots/boxscores rely on custom methods.
+- [PARTIAL] Play-by-play collector includes description parsing utilities, but the fallback extraction is not wired into `_extract_player_ids()`.
+- [PASS] ETL pipeline orchestration with checkpointing, batch processing, validation, and CLI data commands is implemented.
+- [PASS] Stint derivation aligns with ORM schema and stores paired home/away lineups.
+- [PASS] Integration tests exist in `tests/integration/` and run cleanly.
+- [PARTIAL] Coverage meets minimum thresholds but remains below the overall target in development guidelines.
+- [PARTIAL] CLAUDE.md files exist throughout the repo, but a few are inaccurate/out of date.
 
 ## Test Results and Coverage
-- `pytest tests/ -v`: 364 passed, 1 warning (SQLAlchemy identity conflict warning in `tests/unit/data/test_db.py`).
-- `pytest --cov=nba_model --cov-report=term-missing:skip-covered tests/ -q`:
-  - Total coverage: **76.71%** (meets 75% global target).
-  - Notable module coverage below Phase 2a/2b targets:
-    - `nba_model/data/schema.py`: 75%
-    - `nba_model/data/collectors/players.py`: 74%
-    - `nba_model/data/collectors/games.py`: 78%
-    - `nba_model/data/collectors/boxscores.py`: 78%
+- `pytest tests/ -v`: 406 passed, 1 warning (SQLAlchemy identity conflict warning in `tests/unit/data/test_db.py`).
+- `pytest --cov=nba_model --cov-report=term-missing tests/`:
+  - Total coverage: **82.23%** (meets minimum 75% requirement, below 85% target).
+  - Lowest coverage areas (from report):
+    - `nba_model/cli.py`: 73%
     - `nba_model/data/pipelines.py`: 60%
-    - `nba_model/data/stints.py`: 58%
     - `nba_model/data/validation.py`: 59%
 
 ## Issues Found
 
-### Critical
-1. **Stint derivation does not match ORM schema or Play model fields.**
-   - `nba_model/data/stints.py` expects `Play` to have `player1_team_id`, `pc_time_string`, and `visitor_description` fields, but the ORM model has `team_id`, `pc_time`, and `away_description`.
-   - `StintDeriver` constructs `Stint` with `lineup_json`, `start_time`, and `end_time` only, but the ORM model requires `period`, `duration_seconds`, `home_lineup`, and `away_lineup`.
-   - Result: `derive_stints()` will raise `AttributeError` or `TypeError` when run against real ORM objects; stints cannot be persisted.
+### Unresolved
+1. **Collector interface divergence** (UNRESOLVED)
+   - Spec requires each collector to implement `collect(season_range, resume_from)` and `get_last_checkpoint()`.
+   - Only `GamesCollector` and `PlayByPlayCollector` implement `collect`, while `PlayersCollector`, `ShotsCollector`, and `BoxScoreCollector` expose collector-specific methods instead.
 
-### High
-2. **Phase 2c integration tests are missing.**
-   - `tests/integration/` only contains a `CLAUDE.md` and `__init__.py`. This does not satisfy the Phase 2c requirement for integration tests.
-   - Existing unit tests use mocked play objects that do not reflect actual ORM fields, masking the issues above.
+2. **Play-by-play description fallback not applied** (UNRESOLVED)
+   - `PlayByPlayCollector._extract_player_ids()` returns only explicit `PLAYER*_ID` fields and does not call `extract_player_references_from_description()` when IDs are missing.
 
-3. **Phase 2a/2b coverage requirements not met.**
-   - Phase 2a and 2b both specify 90%+ coverage for schema/collector code. Current coverage for `schema.py` and multiple collectors is below 90%.
+3. **Lineup JSON column type mismatch** (UNRESOLVED)
+   - `Stint.home_lineup` / `Stint.away_lineup` are stored as `String(100)` instead of TEXT as specified in Phase 2.
 
-### Medium
-4. **Collector interface deviates from Phase 2 spec.**
-   - Spec requires each collector to expose `collect(season_range, resume_from=None)` and `get_last_checkpoint()`.
-   - Current collectors expose specialized methods (`collect_season`, `collect_games`, etc.) and do not implement checkpoint interfaces directly.
+4. **Player tracking endpoint mismatch** (UNRESOLVED)
+   - Phase 2 requires `boxscoreplayertrackv2`; implementation uses `BoxScorePlayerTrackV3` in `nba_model/data/api.py`.
 
-5. **NBA API rate-limit exception is never raised.**
-   - `NBAApiRateLimitError` is defined but `_request_with_retry()` never raises it after retries are exhausted on HTTP 429.
+5. **Coverage below target** (UNRESOLVED)
+   - Overall coverage meets the minimum 75% requirement but does not reach the 85% target. Unit/integration coverage targets are not reported separately.
 
-6. **Play-by-play spec item not implemented.**
-   - Phase 2 requires extracting player references from event descriptions; current implementation only uses `PLAYER1_ID/PLAYER2_ID/PLAYER3_ID` and does not parse descriptions.
+6. **CLAUDE.md accuracy gaps** (UNRESOLVED)
+   - `nba_model/data/CLAUDE.md` references `DataPipeline` (actual class is `CollectionPipeline`).
+   - `nba_model/data/collectors/CLAUDE.md` shows an outdated `BaseCollector` signature and checkpoint method names.
+   - Root `CLAUDE.md` states a 75% coverage target, which conflicts with the 85% overall target in `DEVELOPMENT_GUIDELINES.md`.
 
-### Low
-7. **CLAUDE.md accuracy issues.**
-   - `CLAUDE.md` (root), `nba_model/CLAUDE.md`, and `nba_model/data/CLAUDE.md` still state Phase 2 is not started and describe data subpackage as stub.
+### Resolved
+1. **Stint derivation vs ORM mismatch** (RESOLVED)
+   - `nba_model/data/stints.py` now aligns with ORM fields and constructs paired home/away stints with required attributes.
+
+2. **Integration tests missing** (RESOLVED)
+   - `tests/integration/test_data_pipeline.py` provides end-to-end integration coverage for data pipeline and storage.
+
+3. **Rate-limit error never raised** (RESOLVED)
+   - `NBAApiRateLimitError` is now raised after retry exhaustion for HTTP 429.
 
 ## Overall Assessment
-Phase 2 is **partially compliant**. Core schema, collectors, API wrapper, and pipelines exist, and tests run cleanly. However, the stint derivation implementation is incompatible with the ORM schema and play-by-play model, which breaks a key Phase 2 requirement. Integration tests are missing, and coverage targets for Phase 2a/2b are not satisfied. Documentation (CLAUDE.md) is also stale. These issues should be addressed before considering Phase 2 complete.
+Phase 2 is **largely implemented and operational**, with tests passing and the data pipeline working end-to-end. Remaining gaps are mostly spec alignment and documentation accuracy (collector interfaces, player tracking endpoint version, TEXT column requirement, and play-by-play description fallback). Coverage exceeds minimum requirements but is below the target threshold in development guidelines. Addressing the unresolved issues would bring Phase 2 to full compliance.
