@@ -23,7 +23,7 @@ from tqdm import tqdm
 
 from nba_model import __version__
 from nba_model.config import get_settings
-from nba_model.logging import setup_logging, get_logger
+from nba_model.logging import get_logger, setup_logging
 
 # Logger for CLI
 logger = get_logger(__name__)
@@ -1082,17 +1082,29 @@ def train_transformer(
             help="Directory to save trained model",
         ),
     ] = None,
+    season: Annotated[
+        str | None,
+        typer.Option(
+            "--season",
+            "-s",
+            help="Season to train on (e.g., 2023-24)",
+        ),
+    ] = None,
 ) -> None:
     """Train the Transformer sequence model.
 
     Trains GameFlowTransformer on play-by-play event sequences.
     Uses AdamW optimizer with gradient clipping.
+
+    Note: For full multi-task training with all components, use 'train all'.
     """
     from pathlib import Path
 
     import torch
+    import torch.nn.functional as F
     from torch.optim import AdamW
     from torch.optim.lr_scheduler import ReduceLROnPlateau
+    from torch.utils.data import DataLoader
 
     from nba_model.models import GameFlowTransformer
 
@@ -1125,11 +1137,94 @@ def train_transformer(
     scheduler = ReduceLROnPlateau(optimizer, mode="min", patience=5, factor=0.5)
 
     console.print(
-        f"[yellow]Note: Full training requires NBADataset with play-by-play data.[/yellow]"
+        f"Model initialized with {sum(p.numel() for p in model.parameters()):,} parameters"
     )
-    console.print(f"Model initialized with {sum(p.numel() for p in model.parameters()):,} parameters")
 
-    # Save initialized model
+    # Attempt to train if database exists
+    trained = False
+    if settings.db_path_obj.exists():
+        from nba_model.data import init_db, session_scope
+        from nba_model.models import NBADataset, nba_collate_fn, temporal_split
+
+        init_db()
+
+        with session_scope() as session:
+            # Determine training season
+            if season:
+                train_season = season
+            else:
+                from sqlalchemy import func
+
+                from nba_model.data.models import Game
+
+                result = session.query(func.max(Game.season_id)).scalar()
+                train_season = result
+
+            if train_season:
+                console.print(f"Loading data for season: [cyan]{train_season}[/cyan]")
+                dataset = NBADataset.from_season(train_season, session)
+
+                if len(dataset) >= 10:
+                    train_dataset, val_dataset = temporal_split(dataset, val_ratio=0.2)
+                    console.print(
+                        f"Training: {len(train_dataset)} games, Validation: {len(val_dataset)} games"
+                    )
+
+                    train_loader = DataLoader(
+                        train_dataset,
+                        batch_size=batch_size,
+                        shuffle=True,
+                        collate_fn=nba_collate_fn,
+                    )
+
+                    console.print("\n[bold green]Training Transformer...[/bold green]")
+                    model.train()
+                    for epoch in range(epochs):
+                        epoch_loss = 0.0
+                        batch_count = 0
+                        for batch in train_loader:
+                            optimizer.zero_grad()
+                            # Get transformer output (sequence representation)
+                            tokens = batch["sequence"]
+                            output = model(
+                                tokens.events.to(device),
+                                tokens.times.to(device),
+                                tokens.scores.to(device),
+                                tokens.lineups.to(device),
+                                tokens.mask.to(device),
+                            )
+                            # Use margin prediction as auxiliary loss target
+                            target = batch["margin"].to(device)
+                            loss = F.huber_loss(
+                                output.mean(dim=1, keepdim=True), target
+                            )
+                            loss.backward()
+                            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                            optimizer.step()
+                            epoch_loss += loss.item()
+                            batch_count += 1
+
+                        avg_loss = epoch_loss / max(batch_count, 1)
+                        scheduler.step(avg_loss)
+                        if (epoch + 1) % 10 == 0 or epoch == 0:
+                            console.print(
+                                f"  Epoch {epoch + 1}/{epochs} - Loss: {avg_loss:.4f}"
+                            )
+
+                    trained = True
+                    console.print("[green]Training complete![/green]")
+                else:
+                    console.print(
+                        f"[yellow]Insufficient games ({len(dataset)}). Using 'train all' recommended.[/yellow]"
+                    )
+    else:
+        console.print("[yellow]Database not found. Run 'data collect' first.[/yellow]")
+
+    if not trained:
+        console.print("[yellow]Saving initialized (untrained) weights.[/yellow]")
+        console.print("[yellow]For full training, use: nba-model train all[/yellow]")
+
+    # Save model
     model_path = output_dir / "transformer.pt"
     torch.save(model.state_dict(), model_path)
     console.print(f"[green]Saved model to {model_path}[/green]")
@@ -1167,16 +1262,29 @@ def train_gnn(
             help="Directory to save trained model",
         ),
     ] = None,
+    season: Annotated[
+        str | None,
+        typer.Option(
+            "--season",
+            "-s",
+            help="Season to train on (e.g., 2023-24)",
+        ),
+    ] = None,
 ) -> None:
     """Train the GNN player interaction model.
 
     Trains GATv2-based PlayerInteractionGNN on lineup graphs.
     Models player interactions and team dynamics.
+
+    Note: For full multi-task training with all components, use 'train all'.
     """
     from pathlib import Path
 
     import torch
+    import torch.nn.functional as F
     from torch.optim import AdamW
+    from torch.utils.data import DataLoader
+    from torch_geometric.data import Batch
 
     from nba_model.models import PlayerInteractionGNN
 
@@ -1208,11 +1316,91 @@ def train_gnn(
     optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-5)
 
     console.print(
-        f"[yellow]Note: Full training requires NBADataset with lineup graph data.[/yellow]"
+        f"Model initialized with {sum(p.numel() for p in model.parameters()):,} parameters"
     )
-    console.print(f"Model initialized with {sum(p.numel() for p in model.parameters()):,} parameters")
 
-    # Save initialized model
+    # Attempt to train if database exists
+    trained = False
+    if settings.db_path_obj.exists():
+        from nba_model.data import init_db, session_scope
+        from nba_model.models import NBADataset, nba_collate_fn, temporal_split
+
+        init_db()
+
+        with session_scope() as session:
+            # Determine training season
+            if season:
+                train_season = season
+            else:
+                from sqlalchemy import func
+
+                from nba_model.data.models import Game
+
+                result = session.query(func.max(Game.season_id)).scalar()
+                train_season = result
+
+            if train_season:
+                console.print(f"Loading data for season: [cyan]{train_season}[/cyan]")
+                dataset = NBADataset.from_season(train_season, session)
+
+                if len(dataset) >= 10:
+                    train_dataset, val_dataset = temporal_split(dataset, val_ratio=0.2)
+                    console.print(
+                        f"Training: {len(train_dataset)} games, Validation: {len(val_dataset)} games"
+                    )
+
+                    train_loader = DataLoader(
+                        train_dataset,
+                        batch_size=batch_size,
+                        shuffle=True,
+                        collate_fn=nba_collate_fn,
+                    )
+
+                    console.print("\n[bold green]Training GNN...[/bold green]")
+                    model.train()
+                    for epoch in range(epochs):
+                        epoch_loss = 0.0
+                        batch_count = 0
+                        for batch in train_loader:
+                            optimizer.zero_grad()
+                            # Get GNN output from graph batch
+                            graph_batch = Batch.from_data_list(batch["graph"]).to(
+                                device
+                            )
+                            output = model(
+                                graph_batch.x, graph_batch.edge_index, graph_batch.batch
+                            )
+                            # Use margin prediction as auxiliary loss target
+                            target = batch["margin"].to(device)
+                            loss = F.huber_loss(
+                                output.mean(dim=1, keepdim=True), target
+                            )
+                            loss.backward()
+                            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                            optimizer.step()
+                            epoch_loss += loss.item()
+                            batch_count += 1
+
+                        avg_loss = epoch_loss / max(batch_count, 1)
+                        if (epoch + 1) % 10 == 0 or epoch == 0:
+                            console.print(
+                                f"  Epoch {epoch + 1}/{epochs} - Loss: {avg_loss:.4f}"
+                            )
+
+                    trained = True
+                    console.print("[green]Training complete![/green]")
+                else:
+                    console.print(
+                        f"[yellow]Insufficient games ({len(dataset)}). Using 'train all' recommended.[/yellow]"
+                    )
+    else:
+        console.print("[yellow]Database not found. Run 'data collect' first.[/yellow]")
+
+    if not trained:
+        console.print("[yellow]Saving initialized (untrained) weights.[/yellow]")
+        console.print("[yellow]For full training, use: nba-model train all[/yellow]")
+
+    # Save model
     model_path = output_dir / "gnn.pt"
     torch.save(model.state_dict(), model_path)
     console.print(f"[green]Saved model to {model_path}[/green]")
@@ -1257,6 +1445,14 @@ def train_fusion(
             help="Directory to save trained model",
         ),
     ] = None,
+    season: Annotated[
+        str | None,
+        typer.Option(
+            "--season",
+            "-s",
+            help="Season to train on (e.g., 2023-24)",
+        ),
+    ] = None,
 ) -> None:
     """Train the Two-Tower fusion model.
 
@@ -1264,17 +1460,21 @@ def train_fusion(
     - Win probability (BCE loss)
     - Point margin (Huber loss)
     - Total points (Huber loss)
+
+    Note: This command trains all three components (Transformer, GNN, Fusion).
+    Equivalent to 'train all' but saves to a specific directory.
     """
     from pathlib import Path
 
     import torch
+    from torch.utils.data import DataLoader
 
     from nba_model.models import (
+        FusionTrainer,
         GameFlowTransformer,
         PlayerInteractionGNN,
-        TwoTowerFusion,
-        FusionTrainer,
         TrainingConfig,
+        TwoTowerFusion,
     )
 
     settings = get_settings()
@@ -1290,9 +1490,7 @@ def train_fusion(
     )
 
     # Initialize component models
-    transformer = GameFlowTransformer(
-        vocab_size=15, d_model=128, nhead=4, num_layers=2
-    )
+    transformer = GameFlowTransformer(vocab_size=15, d_model=128, nhead=4, num_layers=2)
     gnn = PlayerInteractionGNN(
         node_features=16, hidden_dim=64, output_dim=128, num_heads=4, num_layers=2
     )
@@ -1313,17 +1511,82 @@ def train_fusion(
     trainer = FusionTrainer(transformer, gnn, fusion, config, device=device)
 
     total_params = sum(
-        sum(p.numel() for p in m.parameters())
-        for m in [transformer, gnn, fusion]
+        sum(p.numel() for p in m.parameters()) for m in [transformer, gnn, fusion]
     )
     console.print(f"Total parameters: {total_params:,}")
 
-    console.print(
-        f"[yellow]Note: Full training requires NBADataset with game data.[/yellow]"
-    )
-    console.print(f"[yellow]Run with: trainer.fit(train_loader, val_loader)[/yellow]")
+    # Attempt to train if database exists
+    trained = False
+    if settings.db_path_obj.exists():
+        from nba_model.data import init_db, session_scope
+        from nba_model.models import NBADataset, nba_collate_fn, temporal_split
 
-    # Save initialized models
+        init_db()
+
+        with session_scope() as session:
+            # Determine training season
+            if season:
+                train_season = season
+            else:
+                from sqlalchemy import func
+
+                from nba_model.data.models import Game
+
+                result = session.query(func.max(Game.season_id)).scalar()
+                train_season = result
+
+            if train_season:
+                console.print(f"Loading data for season: [cyan]{train_season}[/cyan]")
+                dataset = NBADataset.from_season(train_season, session)
+
+                if len(dataset) >= 10:
+                    train_dataset, val_dataset = temporal_split(dataset, val_ratio=0.2)
+                    console.print(
+                        f"Training: {len(train_dataset)} games, Validation: {len(val_dataset)} games"
+                    )
+
+                    if len(train_dataset) > 0 and len(val_dataset) > 0:
+                        train_loader = DataLoader(
+                            train_dataset,
+                            batch_size=batch_size,
+                            shuffle=True,
+                            collate_fn=nba_collate_fn,
+                        )
+                        val_loader = DataLoader(
+                            val_dataset,
+                            batch_size=batch_size,
+                            shuffle=False,
+                            collate_fn=nba_collate_fn,
+                        )
+
+                        console.print(
+                            "\n[bold green]Training Fusion Model...[/bold green]"
+                        )
+                        with Progress(
+                            SpinnerColumn(),
+                            TextColumn("[progress.description]{task.description}"),
+                            console=console,
+                        ) as progress:
+                            progress.add_task("Training...", total=None)
+                            history = trainer.fit(
+                                train_loader, val_loader, epochs=epochs
+                            )
+
+                        trained = True
+                        console.print("[green]Training complete![/green]")
+                        console.print(f"  Best epoch: {history.best_epoch}")
+                        console.print(f"  Best val loss: {history.best_val_loss:.4f}")
+                else:
+                    console.print(
+                        f"[yellow]Insufficient games ({len(dataset)}). Need at least 10.[/yellow]"
+                    )
+    else:
+        console.print("[yellow]Database not found. Run 'data collect' first.[/yellow]")
+
+    if not trained:
+        console.print("[yellow]Saving initialized (untrained) weights.[/yellow]")
+
+    # Save models
     trainer.save_models(output_dir)
     console.print(f"[green]Saved models to {output_dir}[/green]")
 
@@ -1388,19 +1651,18 @@ def train_all(
     Trains the complete fusion model (Transformer + GNN + Fusion) and
     saves versioned models to the registry.
     """
-    from pathlib import Path
 
     import torch
     from torch.utils.data import DataLoader
 
     from nba_model.models import (
-        GameFlowTransformer,
-        PlayerInteractionGNN,
-        TwoTowerFusion,
         FusionTrainer,
-        TrainingConfig,
+        GameFlowTransformer,
         ModelRegistry,
         NBADataset,
+        PlayerInteractionGNN,
+        TrainingConfig,
+        TwoTowerFusion,
         nba_collate_fn,
         temporal_split,
     )
@@ -1423,9 +1685,7 @@ def train_all(
     console.print(f"Model version: [cyan]{model_version}[/cyan]")
 
     # Initialize models
-    transformer = GameFlowTransformer(
-        vocab_size=15, d_model=128, nhead=4, num_layers=2
-    )
+    transformer = GameFlowTransformer(vocab_size=15, d_model=128, nhead=4, num_layers=2)
     gnn = PlayerInteractionGNN(
         node_features=16, hidden_dim=64, output_dim=128, num_heads=4, num_layers=2
     )
@@ -1446,8 +1706,7 @@ def train_all(
     trainer = FusionTrainer(transformer, gnn, fusion, config, device=device)
 
     total_params = sum(
-        sum(p.numel() for p in m.parameters())
-        for m in [transformer, gnn, fusion]
+        sum(p.numel() for p in m.parameters()) for m in [transformer, gnn, fusion]
     )
     console.print(f"Total parameters: {total_params:,}")
 
@@ -1478,8 +1737,9 @@ def train_all(
                 train_season = season
             else:
                 # Get most recent season with data
-                from nba_model.data.models import Game
                 from sqlalchemy import func
+
+                from nba_model.data.models import Game
 
                 result = session.query(func.max(Game.season_id)).scalar()
                 train_season = result if result else None
@@ -1547,8 +1807,12 @@ def train_all(
                         results_table.add_column("Metric", style="cyan")
                         results_table.add_column("Value", style="green")
                         results_table.add_row("Best Epoch", str(history.best_epoch))
-                        results_table.add_row("Best Val Loss", f"{history.best_val_loss:.4f}")
-                        results_table.add_row("Training Time", f"{history.total_time:.1f}s")
+                        results_table.add_row(
+                            "Best Val Loss", f"{history.best_val_loss:.4f}"
+                        )
+                        results_table.add_row(
+                            "Training Time", f"{history.total_time:.1f}s"
+                        )
                         if history.epochs:
                             results_table.add_row(
                                 "Final Accuracy", f"{train_metrics['accuracy']:.3f}"
@@ -1595,7 +1859,7 @@ def train_all(
     # Show available versions
     versions = registry.list_versions()
     if versions:
-        console.print(f"\n[bold]Available model versions:[/bold]")
+        console.print("\n[bold]Available model versions:[/bold]")
         for v in versions[:5]:  # Show latest 5
             marker = " [green](latest)[/green]" if v.is_latest else ""
             console.print(f"  - {v.version}{marker}")
@@ -1616,7 +1880,7 @@ def train_list() -> None:
 
     if not versions:
         console.print("[yellow]No trained models found.[/yellow]")
-        console.print(f"Run [cyan]nba-model train all[/cyan] to train a model.")
+        console.print("Run [cyan]nba-model train all[/cyan] to train a model.")
         return
 
     table = Table(title="Trained Model Versions")
@@ -1629,7 +1893,11 @@ def train_list() -> None:
     for v in versions:
         metadata = registry.load_metadata(v.version)
         if metadata:
-            date_str = metadata.training_date.strftime("%Y-%m-%d") if metadata.training_date else "N/A"
+            date_str = (
+                metadata.training_date.strftime("%Y-%m-%d")
+                if metadata.training_date
+                else "N/A"
+            )
             accuracy = metadata.validation_metrics.get("accuracy", 0.0)
             loss = metadata.validation_metrics.get("loss", 0.0)
         else:
@@ -1673,12 +1941,11 @@ def train_compare(
         comparison = registry.compare_versions(version_a, version_b)
     except Exception as e:
         console.print(f"[red]Error comparing versions: {e}[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     console.print(
         Panel(
-            f"[bold]Version Comparison[/bold]\n"
-            f"{version_a} vs {version_b}",
+            f"[bold]Version Comparison[/bold]\n" f"{version_a} vs {version_b}",
             title="Compare Models",
         )
     )

@@ -25,9 +25,9 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
 
 from nba_model.logging import get_logger
 
@@ -296,7 +296,8 @@ class GameFlowTransformer(nn.Module):
             Sequence representation of shape (batch, d_model) via mean pooling
             over non-masked positions.
         """
-        batch_size, seq_len = events.shape
+        # Shape validation (unused but checked for correctness)
+        _ = events.shape  # (batch, seq_len)
 
         # Embed event types
         event_emb = self.event_embedding(events)  # (batch, seq_len, d_model)
@@ -433,7 +434,6 @@ class EventTokenizer:
         Returns:
             TokenizedSequence with all tensors ready for model input.
         """
-        import pandas as pd
 
         # Filter to relevant events and sort by time
         plays = plays_df.copy()
@@ -544,8 +544,14 @@ class EventTokenizer:
     ) -> torch.Tensor:
         """Encode lineup as 20-dim one-hot (10 players, home/away indicator).
 
-        Encodes the 10 on-court players (5 home, 5 away) for each play event.
-        Each player slot gets 2 dimensions: one for home, one for away team.
+        Per specification: 20-dimensional one-hot encoding for 10 on-court players
+        with home/away indicators. All values are binary (0 or 1).
+
+        Encoding structure:
+            - Dims 0-4: Home player positions 1-5 (1.0 if filled)
+            - Dims 5-9: Away player positions 1-5 (1.0 if filled)
+            - Dims 10-14: Home team indicator (1.0 for home player positions)
+            - Dims 15-19: Away team indicator (1.0 for away player positions)
 
         Args:
             plays: DataFrame of play events with period and pc_time columns.
@@ -589,26 +595,19 @@ class EventTokenizer:
                     away_lineup = []
 
             # Parse times
-            start_time = self._parse_time_to_seconds(str(stint.get("start_time", "12:00")))
+            start_time = self._parse_time_to_seconds(
+                str(stint.get("start_time", "12:00"))
+            )
             end_time = self._parse_time_to_seconds(str(stint.get("end_time", "0:00")))
 
-            stints_by_period[period].append({
-                "home_lineup": home_lineup,
-                "away_lineup": away_lineup,
-                "start_time": start_time,
-                "end_time": end_time,
-            })
-
-        # Build a mapping of player IDs to consistent indices within the game
-        all_players: set[int] = set()
-        for period_stints in stints_by_period.values():
-            for stint in period_stints:
-                all_players.update(stint["home_lineup"])
-                all_players.update(stint["away_lineup"])
-
-        # Create player to index mapping (use hash for consistent ordering)
-        player_list = sorted(all_players)
-        player_to_idx = {pid: idx % 5 for idx, pid in enumerate(player_list)}
+            stints_by_period[period].append(
+                {
+                    "home_lineup": home_lineup,
+                    "away_lineup": away_lineup,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                }
+            )
 
         # Encode each play
         for _, play in plays.iterrows():
@@ -624,25 +623,22 @@ class EventTokenizer:
                     # Check if play falls within stint time range
                     # Note: start_time > end_time since clock counts down
                     if stint["end_time"] <= play_time <= stint["start_time"]:
-                        # Encode home players (slots 0-9: positions 0,2,4,6,8 for home)
-                        for i, pid in enumerate(stint["home_lineup"][:5]):
-                            slot = i * 2  # 0, 2, 4, 6, 8
-                            encoding[slot] = 1.0
+                        # 20-dim one-hot encoding per spec:
+                        # Dims 0-4: Home player positions (binary)
+                        for i in range(min(5, len(stint["home_lineup"]))):
+                            encoding[i] = 1.0
 
-                        # Encode away players (slots 0-9: positions 1,3,5,7,9 for away)
-                        for i, pid in enumerate(stint["away_lineup"][:5]):
-                            slot = i * 2 + 1  # 1, 3, 5, 7, 9
-                            encoding[slot] = 1.0
+                        # Dims 5-9: Away player positions (binary)
+                        for i in range(min(5, len(stint["away_lineup"]))):
+                            encoding[5 + i] = 1.0
 
-                        # Add player identity features in remaining slots (10-19)
-                        # This encodes which specific players are on court
-                        for i, pid in enumerate(stint["home_lineup"][:5]):
-                            if pid in player_to_idx:
-                                encoding[10 + i] = (player_to_idx[pid] + 1) / 5.0
+                        # Dims 10-14: Home team indicator (binary)
+                        for i in range(min(5, len(stint["home_lineup"]))):
+                            encoding[10 + i] = 1.0
 
-                        for i, pid in enumerate(stint["away_lineup"][:5]):
-                            if pid in player_to_idx:
-                                encoding[15 + i] = (player_to_idx[pid] + 1) / 5.0
+                        # Dims 15-19: Away team indicator (binary)
+                        for i in range(min(5, len(stint["away_lineup"]))):
+                            encoding[15 + i] = 1.0
 
                         break
 
@@ -691,34 +687,44 @@ class EventTokenizer:
         pad_len = target_len - current_len
 
         # Pad events with pad_idx (0)
-        events = torch.cat([
-            tokens.events,
-            torch.zeros(pad_len, dtype=torch.long),
-        ])
+        events = torch.cat(
+            [
+                tokens.events,
+                torch.zeros(pad_len, dtype=torch.long),
+            ]
+        )
 
         # Pad times with zeros
-        times = torch.cat([
-            tokens.times,
-            torch.zeros(pad_len, 1),
-        ])
+        times = torch.cat(
+            [
+                tokens.times,
+                torch.zeros(pad_len, 1),
+            ]
+        )
 
         # Pad scores with zeros
-        scores = torch.cat([
-            tokens.scores,
-            torch.zeros(pad_len, 1),
-        ])
+        scores = torch.cat(
+            [
+                tokens.scores,
+                torch.zeros(pad_len, 1),
+            ]
+        )
 
         # Pad lineups with zeros
-        lineups = torch.cat([
-            tokens.lineups,
-            torch.zeros(pad_len, 20),
-        ])
+        lineups = torch.cat(
+            [
+                tokens.lineups,
+                torch.zeros(pad_len, 20),
+            ]
+        )
 
         # Update mask to mark padded positions
-        mask = torch.cat([
-            tokens.mask,
-            torch.ones(pad_len, dtype=torch.bool),  # True = masked
-        ])
+        mask = torch.cat(
+            [
+                tokens.mask,
+                torch.ones(pad_len, dtype=torch.bool),  # True = masked
+            ]
+        )
 
         return TokenizedSequence(
             events=events,

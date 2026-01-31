@@ -107,7 +107,7 @@ exclude = [
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM", "RUF"]
-ignore = ["E501", "N806", "N818", "RUF002"]  # N806: X is ML convention; N818: legacy exception names; RUF002: math symbols
+ignore = ["E501", "N806", "N812", "N818", "RUF002"]  # N806/N812: ML conventions (X, F); N818: legacy exception names; RUF002: math symbols
 
 [tool.ruff.lint.isort]
 known-first-party = ["nba_model"]

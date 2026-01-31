@@ -28,7 +28,6 @@ from typing import TYPE_CHECKING
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 
 from nba_model.logging import get_logger
 from nba_model.types import GameId, TeamId
@@ -368,15 +367,16 @@ class ContextFeatureBuilder:
         Returns:
             Context feature tensor of shape (32,).
         """
+        import json
+
         from nba_model.data.models import (
             Game,
             GameStats,
-            PlayerRAPM,
             LineupSpacing,
+            PlayerRAPM,
             SeasonStats,
             Stint,
         )
-        import json
 
         logger.debug("Building context features for game {}", game_id)
 
@@ -394,9 +394,11 @@ class ContextFeatureBuilder:
 
         # Get season stats for normalization
         season_stats = {}
-        stats_query = db_session.query(SeasonStats).filter(
-            SeasonStats.season_id == season_id
-        ).all()
+        stats_query = (
+            db_session.query(SeasonStats)
+            .filter(SeasonStats.season_id == season_id)
+            .all()
+        )
         for stat in stats_query:
             season_stats[stat.metric_name] = (stat.mean_value, stat.std_value)
 
@@ -433,8 +435,12 @@ class ContextFeatureBuilder:
 
         # Team efficiency features (z-scored)
         if home_stats:
-            features["home_off_rating_z"] = zscore(home_stats.offensive_rating, "offensive_rating")
-            features["home_def_rating_z"] = zscore(home_stats.defensive_rating, "defensive_rating")
+            features["home_off_rating_z"] = zscore(
+                home_stats.offensive_rating, "offensive_rating"
+            )
+            features["home_def_rating_z"] = zscore(
+                home_stats.defensive_rating, "defensive_rating"
+            )
             features["home_pace_z"] = zscore(home_stats.pace, "pace")
             features["home_efg_z"] = zscore(home_stats.efg_pct, "efg_pct")
             features["home_tov_z"] = zscore(home_stats.tov_pct, "tov_pct")
@@ -442,8 +448,12 @@ class ContextFeatureBuilder:
             features["home_ft_rate_z"] = zscore(home_stats.ft_rate, "ft_rate")
 
         if away_stats:
-            features["away_off_rating_z"] = zscore(away_stats.offensive_rating, "offensive_rating")
-            features["away_def_rating_z"] = zscore(away_stats.defensive_rating, "defensive_rating")
+            features["away_off_rating_z"] = zscore(
+                away_stats.offensive_rating, "offensive_rating"
+            )
+            features["away_def_rating_z"] = zscore(
+                away_stats.defensive_rating, "defensive_rating"
+            )
             features["away_pace_z"] = zscore(away_stats.pace, "pace")
             features["away_efg_z"] = zscore(away_stats.efg_pct, "efg_pct")
             features["away_tov_z"] = zscore(away_stats.tov_pct, "tov_pct")
@@ -492,8 +502,52 @@ class ContextFeatureBuilder:
         features["rest_diff"] = (home_rest_days - away_rest_days) / 7.0
         features["home_back_to_back"] = 1.0 if home_rest_days <= 1 else 0.0
         features["away_back_to_back"] = 1.0 if away_rest_days <= 1 else 0.0
-        features["home_travel_miles"] = 0.0  # Placeholder - would need arena coordinates
-        features["away_travel_miles"] = 0.0
+
+        # Calculate actual travel miles using FatigueCalculator
+        home_travel_miles = 0.0
+        away_travel_miles = 0.0
+        try:
+            import pandas as pd
+
+            from nba_model.features import FatigueCalculator
+
+            fatigue_calc = FatigueCalculator()
+
+            # Build games DataFrame for fatigue calculation
+            games_query = (
+                db_session.query(Game).filter(Game.season_id == season_id).all()
+            )
+
+            if games_query:
+                games_df = pd.DataFrame(
+                    [
+                        {
+                            "game_id": g.game_id,
+                            "game_date": g.game_date,
+                            "home_team_id": g.home_team_id,
+                            "away_team_id": g.away_team_id,
+                        }
+                        for g in games_query
+                    ]
+                )
+
+                game_date = game.game_date
+                if hasattr(game_date, "date"):
+                    game_date = game_date.date()
+
+                # Calculate travel miles for each team
+                home_travel_miles = fatigue_calc.calculate_travel_distance(
+                    home_team_id, game_date, games_df
+                )
+                away_travel_miles = fatigue_calc.calculate_travel_distance(
+                    away_team_id, game_date, games_df
+                )
+        except (ImportError, Exception) as e:
+            logger.debug("Could not calculate travel miles: {}", e)
+
+        # Normalize travel miles (typical max is ~5000 miles for cross-country trip)
+        features["home_travel_miles"] = min(home_travel_miles / 5000.0, 1.0)
+        features["away_travel_miles"] = min(away_travel_miles / 5000.0, 1.0)
 
         # RAPM aggregates
         # Get starting lineup players (from first stint if available)
@@ -514,25 +568,41 @@ class ContextFeatureBuilder:
         if first_stint:
             # Parse lineups
             try:
-                home_lineup = json.loads(first_stint.home_lineup) if isinstance(first_stint.home_lineup, str) else first_stint.home_lineup
-                away_lineup = json.loads(first_stint.away_lineup) if isinstance(first_stint.away_lineup, str) else first_stint.away_lineup
+                home_lineup = (
+                    json.loads(first_stint.home_lineup)
+                    if isinstance(first_stint.home_lineup, str)
+                    else first_stint.home_lineup
+                )
+                away_lineup = (
+                    json.loads(first_stint.away_lineup)
+                    if isinstance(first_stint.away_lineup, str)
+                    else first_stint.away_lineup
+                )
 
                 # Get RAPM for lineup players
                 for player_id in home_lineup:
-                    rapm = db_session.query(PlayerRAPM).filter(
-                        PlayerRAPM.player_id == player_id,
-                        PlayerRAPM.season_id == season_id,
-                    ).first()
+                    rapm = (
+                        db_session.query(PlayerRAPM)
+                        .filter(
+                            PlayerRAPM.player_id == player_id,
+                            PlayerRAPM.season_id == season_id,
+                        )
+                        .first()
+                    )
                     if rapm:
                         home_rapm_sum += rapm.rapm
                         home_orapm_sum += rapm.orapm
                         home_drapm_sum += rapm.drapm
 
                 for player_id in away_lineup:
-                    rapm = db_session.query(PlayerRAPM).filter(
-                        PlayerRAPM.player_id == player_id,
-                        PlayerRAPM.season_id == season_id,
-                    ).first()
+                    rapm = (
+                        db_session.query(PlayerRAPM)
+                        .filter(
+                            PlayerRAPM.player_id == player_id,
+                            PlayerRAPM.season_id == season_id,
+                        )
+                        .first()
+                    )
                     if rapm:
                         away_rapm_sum += rapm.rapm
                         away_orapm_sum += rapm.orapm
@@ -557,24 +627,42 @@ class ContextFeatureBuilder:
             try:
                 from nba_model.features import SpacingCalculator
 
-                home_lineup = json.loads(first_stint.home_lineup) if isinstance(first_stint.home_lineup, str) else first_stint.home_lineup
-                away_lineup = json.loads(first_stint.away_lineup) if isinstance(first_stint.away_lineup, str) else first_stint.away_lineup
+                home_lineup = (
+                    json.loads(first_stint.home_lineup)
+                    if isinstance(first_stint.home_lineup, str)
+                    else first_stint.home_lineup
+                )
+                away_lineup = (
+                    json.loads(first_stint.away_lineup)
+                    if isinstance(first_stint.away_lineup, str)
+                    else first_stint.away_lineup
+                )
 
                 home_hash = SpacingCalculator.compute_lineup_hash(home_lineup)
                 away_hash = SpacingCalculator.compute_lineup_hash(away_lineup)
 
-                home_spacing = db_session.query(LineupSpacing).filter(
-                    LineupSpacing.season_id == season_id,
-                    LineupSpacing.lineup_hash == home_hash,
-                ).first()
+                home_spacing = (
+                    db_session.query(LineupSpacing)
+                    .filter(
+                        LineupSpacing.season_id == season_id,
+                        LineupSpacing.lineup_hash == home_hash,
+                    )
+                    .first()
+                )
 
-                away_spacing = db_session.query(LineupSpacing).filter(
-                    LineupSpacing.season_id == season_id,
-                    LineupSpacing.lineup_hash == away_hash,
-                ).first()
+                away_spacing = (
+                    db_session.query(LineupSpacing)
+                    .filter(
+                        LineupSpacing.season_id == season_id,
+                        LineupSpacing.lineup_hash == away_hash,
+                    )
+                    .first()
+                )
 
                 if home_spacing:
-                    features["home_spacing_area"] = home_spacing.hull_area / 50000.0  # Normalize
+                    features["home_spacing_area"] = (
+                        home_spacing.hull_area / 50000.0
+                    )  # Normalize
                 if away_spacing:
                     features["away_spacing_area"] = away_spacing.hull_area / 50000.0
 
@@ -618,7 +706,6 @@ class ContextFeatureBuilder:
         Returns:
             Context feature tensor of shape (32,).
         """
-        import pandas as pd
 
         if "game_id" in df.columns:
             row = df[df["game_id"] == game_id]

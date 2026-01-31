@@ -79,17 +79,39 @@ If you encounter an OpenMP shared memory error when running tests or importing P
 ```
 OMP: Error #179: Function Can't open SHM2 failed
 ```
+or
+```
+Process exited with signal 6 (SIGABRT)
+```
 
-Try setting the following environment variables:
+**Automatic Fix (Applied in tests/conftest.py):**
+The test suite automatically sets the required environment variables before importing PyTorch. This should resolve the issue in most cases.
+
+**Manual Fix (if automatic fix fails):**
+Set these environment variables BEFORE running tests:
 ```bash
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
+export KMP_DISABLE_SHM=1
+export KMP_DUPLICATE_LIB_OK=TRUE
 ```
 
-Or run tests with:
+Or run tests with inline variables:
 ```bash
-OMP_NUM_THREADS=1 pytest -v
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 KMP_DISABLE_SHM=1 pytest -v
 ```
+
+**Alternative: Conda Environment:**
+If issues persist, consider using a Conda environment which manages OpenMP more reliably:
+```bash
+conda create -n nba-model python=3.11
+conda activate nba-model
+conda install pytorch -c pytorch
+pip install -e ".[dev]"
+```
+
+**Root Cause:**
+This error occurs due to OpenMP shared memory conflicts between different libraries (PyTorch, NumPy, SciPy) on macOS. Setting `OMP_NUM_THREADS=1` disables OpenMP parallelism, avoiding the conflict.
 
 ## Anti-Patterns
 
