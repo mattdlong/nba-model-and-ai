@@ -3,6 +3,51 @@
 Date: 2026-01-31
 Reviewer: Codex CLI
 
+## Loop 3 Final Results (Post-Fix Verification)
+
+**Status: NOT READY**
+
+### Verification of Previously Unresolved Issues
+
+1. **Lineup encoding** - **NOT RESOLVED**
+   - `nba_model/models/transformer.py` uses slot-based binary flags for lineup presence.
+   - Encoding does **not** capture player identity and is effectively constant for 5-player lineups.
+   - The 20-dim vector duplicates slot and team indicators, so it is not a true 10-player one-hot representation.
+
+2. **Travel miles** - **RESOLVED**
+   - `nba_model/models/fusion.py` now calls `FatigueCalculator.calculate_travel_distance()`
+   - Uses season schedule from DB to compute haversine distance
+   - Normalizes travel miles to [0, 1] with 5000-mile cap
+
+3. **CLI train commands** - **RESOLVED**
+   - `train transformer`, `train gnn`, `train fusion` now run training when DB exists
+   - `--season` supported on individual commands
+   - `train fusion` runs full pipeline equivalent to `train all`
+
+4. **PyTorch OpenMP crash** - **NOT RESOLVED**
+   - `tests/conftest.py` sets OpenMP env vars, but `pytest tests/ -v` still exits with signal 6 (SIGABRT)
+   - Manual env override (`OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 KMP_DISABLE_SHM=1 KMP_DUPLICATE_LIB_OK=TRUE`)
+     did not prevent the crash in this environment
+
+### Test Results
+
+```
+Command: source .venv/bin/activate && pytest tests/ -v
+Result: Aborted (signal 6 / SIGABRT)
+```
+
+Coverage **not verified** due to test crash (required: ≥75% overall, ≥80% unit).
+
+### Requirements Compliance Notes
+
+- Core model components (Transformer, GNN, Two-Tower fusion, trainer, dataset, registry) are present.
+- **Phase 4 requirement gap:** Lineup encoding does not represent actual player identities, so the 20-dim "one-hot" lineup feature is effectively constant for standard 5-player lineups.
+- **Testing requirement gap:** Full test suite does not complete due to PyTorch/OpenMP crash.
+
+**FINAL VERDICT: NOT READY**
+
+---
+
 ## Loop 2 Results (Final)
 
 **All Issues Resolved**
