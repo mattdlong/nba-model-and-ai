@@ -448,11 +448,36 @@ class DashboardBuilder:
         # Get top 3 signals for preview
         top_signals = daily_report.get("signals", [])[:3]
 
+        # Load performance data from API file if available
+        performance = {}
+        perf_file = self.output_dir / "api" / "performance.json"
+        if perf_file.exists():
+            try:
+                perf_data = json.loads(perf_file.read_text(encoding="utf-8"))
+                metrics = perf_data.get("metrics", {})
+                performance = {
+                    "win_rate": metrics.get("accuracy", 0),
+                    "roi": metrics.get("roi", 0),
+                    "clv": metrics.get("clv", 0),
+                    "total_bets": metrics.get("total_predictions", 0),
+                }
+            except (json.JSONDecodeError, OSError):
+                logger.debug("Could not load performance data for index page")
+
+        # Default health status (will be updated by update_model_health)
+        health = {"status": "healthy"}
+
+        # Default model info (will be updated by update_model_health)
+        model_info = {"version": "v1.0.0"}
+
         self._render_page(
             "index.html",
             summary=daily_report.get("summary", {}),
             top_signals=top_signals,
             prediction_date=daily_report.get("date", date.today().isoformat()),
+            performance=performance,
+            health=health,
+            model_info=model_info,
         )
 
     def _copy_static_assets(self) -> int:
