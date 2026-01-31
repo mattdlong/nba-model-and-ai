@@ -242,7 +242,7 @@ class SpacingCalculator:
         shots = self._get_player_shots(player_ids, shots_df)
         shot_count = len(shots)
 
-        if shot_count < MIN_SHOTS_FOR_HULL:
+        if shot_count < self.min_shots:
             logger.debug(
                 "Insufficient shots ({}) for lineup {}, returning zeros",
                 shot_count,

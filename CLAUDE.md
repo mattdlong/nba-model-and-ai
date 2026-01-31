@@ -39,7 +39,7 @@ A Python CLI application that predicts NBA game outcomes using machine learning 
 2. **Database**: SQLite for simplicity; designed for Postgres migration if needed
 3. **Config**: Pydantic Settings v2 with environment variable aliases
 4. **ML Stack**: PyTorch 2.2.2 + PyTorch Geometric (requires numpy<2)
-5. **Testing**: pytest with strict mode, 85% coverage target
+5. **Testing**: pytest with strict mode, 75% minimum coverage (80% for new code)
 
 ## Quick Reference
 

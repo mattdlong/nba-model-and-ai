@@ -160,19 +160,17 @@ class TestSeasonNormalizer:
         with pytest.raises(ValueError, match="not been fitted"):
             normalizer.transform(sample_stats_df, season="2023-24")
 
-    def test_transform_missing_season_warns(
+    def test_transform_missing_season_raises_error(
         self,
         normalizer: SeasonNormalizer,
         sample_stats_df: pd.DataFrame,
     ) -> None:
-        """transform() with missing season should warn and skip."""
+        """transform() with missing season should raise ValueError."""
         normalizer.fit(sample_stats_df)
 
-        # Should not raise, but should skip unknown season
-        result_df = normalizer.transform(sample_stats_df, season="2019-20")
-
-        # Should not have z-score columns added
-        assert "pace_z" not in result_df.columns
+        # Should raise error for unknown season
+        with pytest.raises(ValueError, match="Season '2019-20' not found"):
+            normalizer.transform(sample_stats_df, season="2019-20")
 
     def test_multi_season_fit(
         self,

@@ -213,6 +213,14 @@ class SeasonNormalizer:
 
         result = data_df if inplace else data_df.copy()
 
+        # Verify season exists in fit data before transforming any metrics
+        season_keys = [k for k in self.stats.keys() if k[0] == str(season)]
+        if not season_keys:
+            raise ValueError(
+                f"Season '{season}' not found in fit data. "
+                f"Available seasons: {sorted(set(k[0] for k in self.stats.keys()))}"
+            )
+
         for metric in self.metrics:
             if metric not in result.columns:
                 continue

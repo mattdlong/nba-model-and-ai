@@ -330,11 +330,14 @@ class EventParser:
         # Event type codes (from NBA API)
         shot_made = 1
         shot_miss = 2
+        free_throw = 3
         rebound = 4
         turnover = 5
 
         shot_events = {shot_made, shot_miss}
-        possession_start_events = {rebound, turnover}
+        # Possession starts on: rebounds, turnovers (recovery), and inbounds
+        # after free throws (when opponent gets ball after made FT)
+        possession_start_events = {rebound, turnover, free_throw}
 
         # Process each period separately
         for period in result_df["period"].unique():

@@ -25,7 +25,7 @@ class TestSpacingCalculator:
     @pytest.fixture
     def calculator(self) -> SpacingCalculator:
         """Create calculator with test parameters."""
-        return SpacingCalculator(min_shots=5)
+        return SpacingCalculator(min_shots=4)
 
     @pytest.fixture
     def sample_shots_df(self) -> pd.DataFrame:
@@ -126,9 +126,9 @@ class TestSpacingCalculator:
         """With fewer than minimum shots, return zero metrics."""
         shots_df = pd.DataFrame(
             {
-                "player_id": [1, 1],
-                "loc_x": [0, 100],
-                "loc_y": [0, 100],
+                "player_id": [1, 1, 1],
+                "loc_x": [0, 100, 50],
+                "loc_y": [0, 100, 50],
             }
         )
 
@@ -137,7 +137,7 @@ class TestSpacingCalculator:
         assert metrics["hull_area"] == 0.0
         assert metrics["centroid_x"] == 0.0
         assert metrics["centroid_y"] == 0.0
-        assert metrics["shot_count"] == 2
+        assert metrics["shot_count"] == 3
 
     def test_lineup_hash_is_deterministic(self) -> None:
         """Same players in different order should produce same hash."""
