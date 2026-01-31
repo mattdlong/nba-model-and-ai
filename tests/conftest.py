@@ -12,18 +12,18 @@ Example:
         # sample_games is a DataFrame of test game data
         pass
 """
+
 from __future__ import annotations
 
-import json
+from collections.abc import Generator
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import pandas as pd
 import pytest
 
 from nba_model.config import Settings, reset_settings
-
 
 # =============================================================================
 # Paths

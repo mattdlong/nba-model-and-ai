@@ -20,6 +20,7 @@ Example:
     >>> model = TwoTowerFusion(context_dim=32)
     >>> outputs = model(context, transformer_out, gnn_out)
 """
+
 from __future__ import annotations
 
 # Public API - will be populated in Phase 4

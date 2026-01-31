@@ -1,10 +1,10 @@
 """Tests for type definitions module."""
+
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -36,7 +36,6 @@ from nba_model.types import (
     SpacingMetrics,
     TeamId,
 )
-
 
 # =============================================================================
 # Type Alias Tests
@@ -609,7 +608,7 @@ class TestModelNotFoundError:
 
     def test_raise_model_not_found_error(self) -> None:
         """Should be able to raise and catch ModelNotFoundError."""
-        with pytest.raises(ModelNotFoundError, match="v1.0.0"):
+        with pytest.raises(ModelNotFoundError, match=r"v1\.0\.0"):
             raise ModelNotFoundError("Model v1.0.0 not found")
 
     def test_model_not_found_error_is_nba_model_error(self) -> None:

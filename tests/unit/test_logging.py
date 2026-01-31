@@ -1,9 +1,9 @@
 """Tests for logging module."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from loguru import logger
 
 from nba_model.logging import get_logger, setup_logging

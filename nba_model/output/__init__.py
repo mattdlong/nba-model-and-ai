@@ -18,6 +18,7 @@ Example:
     >>> builder.update_predictions(predictions, signals)
     >>> builder.build_full_site()
 """
+
 from __future__ import annotations
 
 # Public API - will be populated in Phase 8

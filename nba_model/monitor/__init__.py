@@ -21,6 +21,7 @@ Example:
     >>> if result['has_drift']:
     ...     print("Retraining recommended")
 """
+
 from __future__ import annotations
 
 # Public API - will be populated in Phase 6

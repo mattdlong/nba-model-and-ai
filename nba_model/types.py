@@ -8,6 +8,7 @@ Example:
     >>> def process(calculator: FeatureCalculator) -> None:
     ...     result = calculator.calculate(game_id="123")
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,7 +18,6 @@ from typing import Any, Protocol, TypedDict
 
 import numpy as np
 import pandas as pd
-
 
 # =============================================================================
 # Type Aliases

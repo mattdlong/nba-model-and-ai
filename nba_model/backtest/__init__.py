@@ -20,6 +20,7 @@ Example:
     >>> engine = WalkForwardEngine(min_train_games=500)
     >>> result = engine.run_backtest(trainer, kelly_calc)
 """
+
 from __future__ import annotations
 
 # Public API - will be populated in Phase 5

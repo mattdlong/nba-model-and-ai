@@ -1,10 +1,9 @@
 """Tests for CLI module."""
+
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
 from typer.testing import CliRunner
 
 from nba_model.cli import app
@@ -119,46 +118,42 @@ class TestFeaturesCommands:
         assert "rapm" in result.stdout
         assert "spatial" in result.stdout
 
-    def test_features_build_runs(self) -> None:
-        """Features build should run without error."""
-        result = runner.invoke(app, ["features", "build"])
+    def test_features_build_help(self) -> None:
+        """Features build help should show options."""
+        result = runner.invoke(app, ["features", "build", "--help"])
 
         assert result.exit_code == 0
+        assert "--seasons" in result.stdout
+        assert "--force" in result.stdout
 
-    def test_features_build_with_force(self) -> None:
-        """Features build should accept --force flag."""
-        result = runner.invoke(app, ["features", "build", "--force"])
-
-        assert result.exit_code == 0
-        assert "Force rebuild enabled" in result.stdout
-
-    def test_features_rapm_runs(self) -> None:
-        """Features rapm should run without error."""
+    def test_features_rapm_requires_season(self) -> None:
+        """Features rapm should require --season option."""
         result = runner.invoke(app, ["features", "rapm"])
 
+        assert result.exit_code == 2  # Missing required option
+
+    def test_features_rapm_help(self) -> None:
+        """Features rapm help should show options."""
+        result = runner.invoke(app, ["features", "rapm", "--help"])
+
         assert result.exit_code == 0
-        assert "Phase 3" in result.stdout
+        assert "--season" in result.stdout
+        assert "--lambda" in result.stdout
+        assert "--cv" in result.stdout
 
-    def test_features_rapm_with_season(self) -> None:
-        """Features rapm should accept --season option."""
-        result = runner.invoke(app, ["features", "rapm", "--season", "2023-24"])
-
-        assert result.exit_code == 0
-        assert "2023-24" in result.stdout
-
-    def test_features_spatial_runs(self) -> None:
-        """Features spatial should run without error."""
+    def test_features_spatial_requires_season(self) -> None:
+        """Features spatial should require --season option."""
         result = runner.invoke(app, ["features", "spatial"])
 
-        assert result.exit_code == 0
-        assert "Phase 3" in result.stdout
+        assert result.exit_code == 2  # Missing required option
 
-    def test_features_spatial_with_season(self) -> None:
-        """Features spatial should accept --season option."""
-        result = runner.invoke(app, ["features", "spatial", "--season", "2023-24"])
+    def test_features_spatial_help(self) -> None:
+        """Features spatial help should show options."""
+        result = runner.invoke(app, ["features", "spatial", "--help"])
 
         assert result.exit_code == 0
-        assert "2023-24" in result.stdout
+        assert "--season" in result.stdout
+        assert "--min-shots" in result.stdout
 
 
 class TestTrainCommands:
@@ -457,7 +452,6 @@ class TestGetDatabaseStats:
 
     def test_returns_stats_list(self) -> None:
         """Should return list of (entity, count, date_range) tuples."""
-        from unittest.mock import MagicMock
 
         from nba_model.cli import _get_database_stats
 
@@ -474,7 +468,6 @@ class TestGetDatabaseStats:
     def test_returns_date_range_when_games_exist(self) -> None:
         """Should return date range when games exist."""
         from datetime import date
-        from unittest.mock import MagicMock
 
         from nba_model.cli import _get_database_stats
 

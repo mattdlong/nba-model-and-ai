@@ -94,8 +94,6 @@ extend-exclude = '''
 [tool.ruff]
 line-length = 88
 target-version = "py311"
-select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM", "RUF"]
-ignore = ["E501"]
 exclude = [
     ".eggs",
     ".git",
@@ -107,7 +105,11 @@ exclude = [
     "data",
 ]
 
-[tool.ruff.isort]
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM", "RUF"]
+ignore = ["E501", "N806", "N818", "RUF002"]  # N806: X is ML convention; N818: legacy exception names; RUF002: math symbols
+
+[tool.ruff.lint.isort]
 known-first-party = ["nba_model"]
 section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
 

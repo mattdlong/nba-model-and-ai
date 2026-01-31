@@ -9,6 +9,7 @@ Example:
     >>> settings = get_settings()
     >>> print(settings.db_path)
 """
+
 from __future__ import annotations
 
 __version__ = "0.1.0"
@@ -18,8 +19,8 @@ __author__ = "NBA Model Team"
 from nba_model.config import Settings, get_settings
 
 __all__ = [
-    "__version__",
-    "__author__",
     "Settings",
+    "__author__",
+    "__version__",
     "get_settings",
 ]

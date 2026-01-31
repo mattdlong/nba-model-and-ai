@@ -9,6 +9,7 @@ Example:
     >>> print(settings.db_path)
     'data/nba.db'
 """
+
 from __future__ import annotations
 
 from pathlib import Path

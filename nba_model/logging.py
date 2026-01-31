@@ -9,6 +9,7 @@ Example:
     >>> logger = get_logger(__name__)
     >>> logger.info("Processing game {}", game_id)
 """
+
 from __future__ import annotations
 
 import sys
@@ -93,4 +94,4 @@ def get_logger(name: str) -> Any:
 
 
 # Export the base logger for direct use
-__all__ = ["setup_logging", "get_logger", "logger"]
+__all__ = ["get_logger", "logger", "setup_logging"]

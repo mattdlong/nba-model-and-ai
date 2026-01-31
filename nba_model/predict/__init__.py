@@ -20,6 +20,7 @@ Example:
     >>> for p in predictions:
     ...     print(f"{p.matchup}: {p.home_win_prob:.1%}")
 """
+
 from __future__ import annotations
 
 # Public API - will be populated in Phase 7

@@ -3,12 +3,11 @@
 Tests end-to-end data collection, transformation, and storage
 using the complete data pipeline with ORM models.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import date
-from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
@@ -26,7 +25,6 @@ from nba_model.data.models import (
     Play,
     Player,
     PlayerGameStats,
-    PlayerSeason,
     Season,
     Shot,
     Stint,
@@ -449,9 +447,7 @@ class TestBoxScoreIntegration:
         )
         mock_api_client.get_player_tracking.return_value = pd.DataFrame()
 
-        collector = BoxScoreCollector(
-            api_client=mock_api_client, db_session=db_session
-        )
+        collector = BoxScoreCollector(api_client=mock_api_client, db_session=db_session)
         game_stats, player_stats = collector.collect_game("0022300001")
 
         # Verify game stats
@@ -548,9 +544,7 @@ class TestPlayersCollectionIntegration:
         db_session: Session,
     ) -> None:
         """Teams should be collected from static data."""
-        collector = PlayersCollector(
-            api_client=mock_api_client, db_session=db_session
-        )
+        collector = PlayersCollector(api_client=mock_api_client, db_session=db_session)
         teams = collector.collect_teams()
 
         # Verify all 30 teams
