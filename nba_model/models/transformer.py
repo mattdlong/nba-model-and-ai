@@ -544,29 +544,128 @@ class EventTokenizer:
     ) -> torch.Tensor:
         """Encode lineup as 20-dim one-hot (10 players, home/away indicator).
 
-        For simplicity, if stints_df is not provided, returns zeros.
-        Full implementation would map player IDs to consistent indices.
+        Encodes the 10 on-court players (5 home, 5 away) for each play event.
+        Each player slot gets 2 dimensions: one for home, one for away team.
 
         Args:
-            plays: DataFrame of play events.
-            stints_df: Optional DataFrame with lineup info per event.
+            plays: DataFrame of play events with period and pc_time columns.
+            stints_df: DataFrame with lineup info (home_lineup, away_lineup,
+                period, start_time, end_time columns).
 
         Returns:
             Tensor of lineup encodings (seq_len, 20).
         """
+        import json
+
         seq_len = len(plays)
 
         if stints_df is None or stints_df.empty:
             # Return zeros if no lineup data available
             return torch.zeros(seq_len, 20, dtype=torch.float32)
 
-        # Simplified implementation - zeros for now
-        # Full implementation would:
-        # 1. Match each play to its stint by time
-        # 2. Encode the 10 on-court players as indices
-        # 3. Create one-hot encoding
-        logger.debug("Lineup encoding using zeros (full implementation pending)")
-        return torch.zeros(seq_len, 20, dtype=torch.float32)
+        # Build lineup encodings for each play
+        lineup_encodings = []
+
+        # Pre-process stints for faster lookup
+        # Group stints by period
+        stints_by_period: dict[int, list[dict]] = {}
+        for _, stint in stints_df.iterrows():
+            period = int(stint.get("period", 1))
+            if period not in stints_by_period:
+                stints_by_period[period] = []
+
+            # Parse lineups
+            home_lineup = stint.get("home_lineup", "[]")
+            away_lineup = stint.get("away_lineup", "[]")
+            if isinstance(home_lineup, str):
+                try:
+                    home_lineup = json.loads(home_lineup)
+                except json.JSONDecodeError:
+                    home_lineup = []
+            if isinstance(away_lineup, str):
+                try:
+                    away_lineup = json.loads(away_lineup)
+                except json.JSONDecodeError:
+                    away_lineup = []
+
+            # Parse times
+            start_time = self._parse_time_to_seconds(str(stint.get("start_time", "12:00")))
+            end_time = self._parse_time_to_seconds(str(stint.get("end_time", "0:00")))
+
+            stints_by_period[period].append({
+                "home_lineup": home_lineup,
+                "away_lineup": away_lineup,
+                "start_time": start_time,
+                "end_time": end_time,
+            })
+
+        # Build a mapping of player IDs to consistent indices within the game
+        all_players: set[int] = set()
+        for period_stints in stints_by_period.values():
+            for stint in period_stints:
+                all_players.update(stint["home_lineup"])
+                all_players.update(stint["away_lineup"])
+
+        # Create player to index mapping (use hash for consistent ordering)
+        player_list = sorted(all_players)
+        player_to_idx = {pid: idx % 5 for idx, pid in enumerate(player_list)}
+
+        # Encode each play
+        for _, play in plays.iterrows():
+            period = int(play.get("period", 1))
+            pc_time = str(play.get("pc_time", "12:00"))
+            play_time = self._parse_time_to_seconds(pc_time)
+
+            # Find matching stint
+            encoding = torch.zeros(20, dtype=torch.float32)
+
+            if period in stints_by_period:
+                for stint in stints_by_period[period]:
+                    # Check if play falls within stint time range
+                    # Note: start_time > end_time since clock counts down
+                    if stint["end_time"] <= play_time <= stint["start_time"]:
+                        # Encode home players (slots 0-9: positions 0,2,4,6,8 for home)
+                        for i, pid in enumerate(stint["home_lineup"][:5]):
+                            slot = i * 2  # 0, 2, 4, 6, 8
+                            encoding[slot] = 1.0
+
+                        # Encode away players (slots 0-9: positions 1,3,5,7,9 for away)
+                        for i, pid in enumerate(stint["away_lineup"][:5]):
+                            slot = i * 2 + 1  # 1, 3, 5, 7, 9
+                            encoding[slot] = 1.0
+
+                        # Add player identity features in remaining slots (10-19)
+                        # This encodes which specific players are on court
+                        for i, pid in enumerate(stint["home_lineup"][:5]):
+                            if pid in player_to_idx:
+                                encoding[10 + i] = (player_to_idx[pid] + 1) / 5.0
+
+                        for i, pid in enumerate(stint["away_lineup"][:5]):
+                            if pid in player_to_idx:
+                                encoding[15 + i] = (player_to_idx[pid] + 1) / 5.0
+
+                        break
+
+            lineup_encodings.append(encoding)
+
+        return torch.stack(lineup_encodings)
+
+    def _parse_time_to_seconds(self, time_str: str) -> int:
+        """Parse MM:SS time string to seconds.
+
+        Args:
+            time_str: Time string in MM:SS format.
+
+        Returns:
+            Total seconds.
+        """
+        try:
+            parts = time_str.split(":")
+            minutes = int(parts[0])
+            seconds = int(parts[1]) if len(parts) > 1 else 0
+            return minutes * 60 + seconds
+        except (ValueError, IndexError):
+            return 720  # Default to 12 minutes
 
     def pad_sequence(
         self,

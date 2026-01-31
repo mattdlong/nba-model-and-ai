@@ -1097,7 +1097,7 @@ def train_transformer(
     from nba_model.models import GameFlowTransformer
 
     settings = get_settings()
-    output_dir = Path(save_dir) if save_dir else settings.models_dir / "transformer"
+    output_dir = Path(save_dir) if save_dir else settings.model_dir_obj / "transformer"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     console.print(
@@ -1181,7 +1181,7 @@ def train_gnn(
     from nba_model.models import PlayerInteractionGNN
 
     settings = get_settings()
-    output_dir = Path(save_dir) if save_dir else settings.models_dir / "gnn"
+    output_dir = Path(save_dir) if save_dir else settings.model_dir_obj / "gnn"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     console.print(
@@ -1278,7 +1278,7 @@ def train_fusion(
     )
 
     settings = get_settings()
-    output_dir = Path(save_dir) if save_dir else settings.models_dir / "fusion"
+    output_dir = Path(save_dir) if save_dir else settings.model_dir_obj / "fusion"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     console.print(
@@ -1367,6 +1367,21 @@ def train_all(
             help="Model version to save (auto-increments if not provided)",
         ),
     ] = None,
+    season: Annotated[
+        str | None,
+        typer.Option(
+            "--season",
+            "-s",
+            help="Season to train on (e.g., 2023-24)",
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Initialize models without training (for testing)",
+        ),
+    ] = False,
 ) -> None:
     """Run full training pipeline.
 
@@ -1376,6 +1391,7 @@ def train_all(
     from pathlib import Path
 
     import torch
+    from torch.utils.data import DataLoader
 
     from nba_model.models import (
         GameFlowTransformer,
@@ -1384,6 +1400,9 @@ def train_all(
         FusionTrainer,
         TrainingConfig,
         ModelRegistry,
+        NBADataset,
+        nba_collate_fn,
+        temporal_split,
     )
 
     settings = get_settings()
@@ -1397,7 +1416,7 @@ def train_all(
     )
 
     # Initialize registry
-    registry = ModelRegistry(base_dir=settings.models_dir)
+    registry = ModelRegistry(base_dir=settings.model_dir_obj)
 
     # Determine version
     model_version = version or registry.next_version("minor")
@@ -1432,10 +1451,6 @@ def train_all(
     )
     console.print(f"Total parameters: {total_params:,}")
 
-    console.print(
-        f"[yellow]Note: Full training requires NBADataset populated with game data.[/yellow]"
-    )
-
     # Display training configuration
     table = Table(title="Training Configuration")
     table.add_column("Parameter", style="cyan")
@@ -1448,8 +1463,116 @@ def train_all(
     table.add_row("Version", model_version)
     console.print(table)
 
-    # Save models to registry (with placeholder metrics until real training)
-    placeholder_metrics = {"accuracy": 0.0, "loss": 0.0}
+    # Check for training data
+    train_metrics = {"accuracy": 0.0, "loss": 0.0}
+    trained = False
+
+    if not dry_run and settings.db_path_obj.exists():
+        from nba_model.data import init_db, session_scope
+
+        init_db()
+
+        with session_scope() as session:
+            # Determine training season
+            if season:
+                train_season = season
+            else:
+                # Get most recent season with data
+                from nba_model.data.models import Game
+                from sqlalchemy import func
+
+                result = session.query(func.max(Game.season_id)).scalar()
+                train_season = result if result else None
+
+            if train_season:
+                console.print(f"Loading data for season: [cyan]{train_season}[/cyan]")
+
+                # Create dataset
+                dataset = NBADataset.from_season(train_season, session)
+
+                if len(dataset) >= 10:  # Minimum games for training
+                    console.print(f"Found {len(dataset)} games for training")
+
+                    # Split data temporally
+                    train_dataset, val_dataset = temporal_split(dataset, val_ratio=0.2)
+                    console.print(
+                        f"Split: {len(train_dataset)} train, {len(val_dataset)} val"
+                    )
+
+                    if len(train_dataset) > 0 and len(val_dataset) > 0:
+                        # Create data loaders
+                        train_loader = DataLoader(
+                            train_dataset,
+                            batch_size=batch_size,
+                            shuffle=True,
+                            collate_fn=nba_collate_fn,
+                        )
+                        val_loader = DataLoader(
+                            val_dataset,
+                            batch_size=batch_size,
+                            shuffle=False,
+                            collate_fn=nba_collate_fn,
+                        )
+
+                        # Train the model
+                        console.print("\n[bold green]Starting training...[/bold green]")
+                        with Progress(
+                            SpinnerColumn(),
+                            TextColumn("[progress.description]{task.description}"),
+                            console=console,
+                        ) as progress:
+                            progress.add_task("Training...", total=None)
+                            history = trainer.fit(
+                                train_loader,
+                                val_loader,
+                                epochs=epochs,
+                            )
+
+                        trained = True
+
+                        # Extract final metrics
+                        if history.epochs:
+                            final_epoch = history.epochs[-1]
+                            train_metrics = {
+                                "accuracy": final_epoch.win_accuracy,
+                                "loss": final_epoch.val_loss,
+                                "brier_score": final_epoch.brier_score,
+                                "margin_mae": final_epoch.margin_mae,
+                                "total_mae": final_epoch.total_mae,
+                            }
+
+                        # Display training results
+                        console.print("\n[bold]Training Results:[/bold]")
+                        results_table = Table()
+                        results_table.add_column("Metric", style="cyan")
+                        results_table.add_column("Value", style="green")
+                        results_table.add_row("Best Epoch", str(history.best_epoch))
+                        results_table.add_row("Best Val Loss", f"{history.best_val_loss:.4f}")
+                        results_table.add_row("Training Time", f"{history.total_time:.1f}s")
+                        if history.epochs:
+                            results_table.add_row(
+                                "Final Accuracy", f"{train_metrics['accuracy']:.3f}"
+                            )
+                        console.print(results_table)
+                    else:
+                        console.print(
+                            "[yellow]Not enough data in train/val splits[/yellow]"
+                        )
+                else:
+                    console.print(
+                        f"[yellow]Insufficient games ({len(dataset)}). Need at least 10.[/yellow]"
+                    )
+            else:
+                console.print("[yellow]No season data found in database.[/yellow]")
+    else:
+        if dry_run:
+            console.print("[yellow]Dry run mode - skipping training.[/yellow]")
+        else:
+            console.print(
+                "[yellow]Database not found. Run 'data collect' first for full training.[/yellow]"
+            )
+
+    # Save models to registry
     hyperparams = {
         "learning_rate": learning_rate,
         "batch_size": batch_size,
@@ -1458,6 +1581,7 @@ def train_all(
         "d_model": 128,
         "gnn_hidden": 64,
         "fusion_hidden": 256,
+        "trained": trained,
     }
 
     models = {
@@ -1465,7 +1589,7 @@ def train_all(
         "gnn": gnn,
         "fusion": fusion,
     }
-    registry.save_model(model_version, models, placeholder_metrics, hyperparams)
+    registry.save_model(model_version, models, train_metrics, hyperparams)
     console.print(f"[green]Saved version {model_version} to registry[/green]")
 
     # Show available versions
@@ -1486,7 +1610,7 @@ def train_list() -> None:
     from nba_model.models import ModelRegistry
 
     settings = get_settings()
-    registry = ModelRegistry(base_dir=settings.models_dir)
+    registry = ModelRegistry(base_dir=settings.model_dir_obj)
 
     versions = registry.list_versions()
 
@@ -1543,7 +1667,7 @@ def train_compare(
     from nba_model.models import ModelRegistry
 
     settings = get_settings()
-    registry = ModelRegistry(base_dir=settings.models_dir)
+    registry = ModelRegistry(base_dir=settings.model_dir_obj)
 
     try:
         comparison = registry.compare_versions(version_a, version_b)

@@ -81,18 +81,18 @@ Lineup Graph ──→ LineupGraphBuilder ──→ GNN ──────┘
 
 ```bash
 # Train all models
-python -m nba_model train all --epochs 50
+python -m nba_model.cli train all --epochs 50
 
 # Train individual components
-python -m nba_model train transformer --epochs 50
-python -m nba_model train gnn --epochs 50
-python -m nba_model train fusion --epochs 50
+python -m nba_model.cli train transformer --epochs 50
+python -m nba_model.cli train gnn --epochs 50
+python -m nba_model.cli train fusion --epochs 50
 
 # List model versions
-python -m nba_model monitor versions
+python -m nba_model.cli train list
 
 # Compare versions
-python -m nba_model monitor compare v1.0.0 v1.1.0
+python -m nba_model.cli train compare v1.0.0 v1.1.0
 ```
 
 ## Integration Points

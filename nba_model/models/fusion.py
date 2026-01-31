@@ -358,6 +358,9 @@ class ContextFeatureBuilder:
     ) -> torch.Tensor:
         """Build context feature vector for a game.
 
+        Queries the database for team stats, fatigue indicators, RAPM sums,
+        and spacing metrics, then assembles them into a feature vector.
+
         Args:
             game_id: NBA game ID.
             db_session: SQLAlchemy database session.
@@ -365,12 +368,224 @@ class ContextFeatureBuilder:
         Returns:
             Context feature tensor of shape (32,).
         """
-        # This is a placeholder implementation
-        # Full implementation would query the database for all features
+        from nba_model.data.models import (
+            Game,
+            GameStats,
+            PlayerRAPM,
+            LineupSpacing,
+            SeasonStats,
+            Stint,
+        )
+        import json
+
         logger.debug("Building context features for game {}", game_id)
 
-        # Return zeros for now - full implementation pending
-        return torch.zeros(self.feature_dim, dtype=torch.float32)
+        features: dict[str, float] = {}
+
+        # Get game info
+        game = db_session.query(Game).filter(Game.game_id == game_id).first()
+        if game is None:
+            logger.warning("Game {} not found, returning zeros", game_id)
+            return torch.zeros(self.feature_dim, dtype=torch.float32)
+
+        home_team_id = game.home_team_id
+        away_team_id = game.away_team_id
+        season_id = game.season_id
+
+        # Get season stats for normalization
+        season_stats = {}
+        stats_query = db_session.query(SeasonStats).filter(
+            SeasonStats.season_id == season_id
+        ).all()
+        for stat in stats_query:
+            season_stats[stat.metric_name] = (stat.mean_value, stat.std_value)
+
+        # Helper for z-scoring
+        def zscore(value: float | None, metric: str) -> float:
+            if value is None:
+                return 0.0
+            if metric in season_stats:
+                mean, std = season_stats[metric]
+                if std > 0:
+                    return (value - mean) / std
+            return 0.0
+
+        # Get team game stats (most recent before this game)
+        home_stats = (
+            db_session.query(GameStats)
+            .join(Game, GameStats.game_id == Game.game_id)
+            .filter(GameStats.team_id == home_team_id)
+            .filter(Game.game_date < game.game_date)
+            .filter(Game.season_id == season_id)
+            .order_by(Game.game_date.desc())
+            .first()
+        )
+
+        away_stats = (
+            db_session.query(GameStats)
+            .join(Game, GameStats.game_id == Game.game_id)
+            .filter(GameStats.team_id == away_team_id)
+            .filter(Game.game_date < game.game_date)
+            .filter(Game.season_id == season_id)
+            .order_by(Game.game_date.desc())
+            .first()
+        )
+
+        # Team efficiency features (z-scored)
+        if home_stats:
+            features["home_off_rating_z"] = zscore(home_stats.offensive_rating, "offensive_rating")
+            features["home_def_rating_z"] = zscore(home_stats.defensive_rating, "defensive_rating")
+            features["home_pace_z"] = zscore(home_stats.pace, "pace")
+            features["home_efg_z"] = zscore(home_stats.efg_pct, "efg_pct")
+            features["home_tov_z"] = zscore(home_stats.tov_pct, "tov_pct")
+            features["home_orb_z"] = zscore(home_stats.orb_pct, "orb_pct")
+            features["home_ft_rate_z"] = zscore(home_stats.ft_rate, "ft_rate")
+
+        if away_stats:
+            features["away_off_rating_z"] = zscore(away_stats.offensive_rating, "offensive_rating")
+            features["away_def_rating_z"] = zscore(away_stats.defensive_rating, "defensive_rating")
+            features["away_pace_z"] = zscore(away_stats.pace, "pace")
+            features["away_efg_z"] = zscore(away_stats.efg_pct, "efg_pct")
+            features["away_tov_z"] = zscore(away_stats.tov_pct, "tov_pct")
+            features["away_orb_z"] = zscore(away_stats.orb_pct, "orb_pct")
+            features["away_ft_rate_z"] = zscore(away_stats.ft_rate, "ft_rate")
+
+        # Rest and fatigue features
+        # Calculate days since last game for each team
+        from sqlalchemy import or_
+
+        home_last_game = (
+            db_session.query(Game)
+            .filter(
+                or_(
+                    Game.home_team_id == home_team_id,
+                    Game.away_team_id == home_team_id,
+                )
+            )
+            .filter(Game.game_date < game.game_date)
+            .order_by(Game.game_date.desc())
+            .first()
+        )
+
+        away_last_game = (
+            db_session.query(Game)
+            .filter(
+                or_(
+                    Game.home_team_id == away_team_id,
+                    Game.away_team_id == away_team_id,
+                )
+            )
+            .filter(Game.game_date < game.game_date)
+            .order_by(Game.game_date.desc())
+            .first()
+        )
+
+        home_rest_days = 3.0  # Default
+        away_rest_days = 3.0
+        if home_last_game:
+            home_rest_days = min(7.0, (game.game_date - home_last_game.game_date).days)
+        if away_last_game:
+            away_rest_days = min(7.0, (game.game_date - away_last_game.game_date).days)
+
+        features["home_rest_days"] = home_rest_days / 7.0  # Normalize to [0, 1]
+        features["away_rest_days"] = away_rest_days / 7.0
+        features["rest_diff"] = (home_rest_days - away_rest_days) / 7.0
+        features["home_back_to_back"] = 1.0 if home_rest_days <= 1 else 0.0
+        features["away_back_to_back"] = 1.0 if away_rest_days <= 1 else 0.0
+        features["home_travel_miles"] = 0.0  # Placeholder - would need arena coordinates
+        features["away_travel_miles"] = 0.0
+
+        # RAPM aggregates
+        # Get starting lineup players (from first stint if available)
+        first_stint = (
+            db_session.query(Stint)
+            .filter(Stint.game_id == game_id)
+            .order_by(Stint.period, Stint.start_time.desc())
+            .first()
+        )
+
+        home_rapm_sum = 0.0
+        away_rapm_sum = 0.0
+        home_orapm_sum = 0.0
+        home_drapm_sum = 0.0
+        away_orapm_sum = 0.0
+        away_drapm_sum = 0.0
+
+        if first_stint:
+            # Parse lineups
+            try:
+                home_lineup = json.loads(first_stint.home_lineup) if isinstance(first_stint.home_lineup, str) else first_stint.home_lineup
+                away_lineup = json.loads(first_stint.away_lineup) if isinstance(first_stint.away_lineup, str) else first_stint.away_lineup
+
+                # Get RAPM for lineup players
+                for player_id in home_lineup:
+                    rapm = db_session.query(PlayerRAPM).filter(
+                        PlayerRAPM.player_id == player_id,
+                        PlayerRAPM.season_id == season_id,
+                    ).first()
+                    if rapm:
+                        home_rapm_sum += rapm.rapm
+                        home_orapm_sum += rapm.orapm
+                        home_drapm_sum += rapm.drapm
+
+                for player_id in away_lineup:
+                    rapm = db_session.query(PlayerRAPM).filter(
+                        PlayerRAPM.player_id == player_id,
+                        PlayerRAPM.season_id == season_id,
+                    ).first()
+                    if rapm:
+                        away_rapm_sum += rapm.rapm
+                        away_orapm_sum += rapm.orapm
+                        away_drapm_sum += rapm.drapm
+
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        features["home_rapm_sum"] = home_rapm_sum / 10.0  # Normalize
+        features["away_rapm_sum"] = away_rapm_sum / 10.0
+        features["rapm_diff"] = (home_rapm_sum - away_rapm_sum) / 10.0
+        features["home_orapm_sum"] = home_orapm_sum / 10.0
+        features["home_drapm_sum"] = home_drapm_sum / 10.0
+        features["away_orapm_sum"] = away_orapm_sum / 10.0
+        features["away_drapm_sum"] = away_drapm_sum / 10.0
+
+        # Spacing features (from lineup_spacing table)
+        features["home_spacing_area"] = 0.0
+        features["away_spacing_area"] = 0.0
+
+        if first_stint:
+            try:
+                from nba_model.features import SpacingCalculator
+
+                home_lineup = json.loads(first_stint.home_lineup) if isinstance(first_stint.home_lineup, str) else first_stint.home_lineup
+                away_lineup = json.loads(first_stint.away_lineup) if isinstance(first_stint.away_lineup, str) else first_stint.away_lineup
+
+                home_hash = SpacingCalculator.compute_lineup_hash(home_lineup)
+                away_hash = SpacingCalculator.compute_lineup_hash(away_lineup)
+
+                home_spacing = db_session.query(LineupSpacing).filter(
+                    LineupSpacing.season_id == season_id,
+                    LineupSpacing.lineup_hash == home_hash,
+                ).first()
+
+                away_spacing = db_session.query(LineupSpacing).filter(
+                    LineupSpacing.season_id == season_id,
+                    LineupSpacing.lineup_hash == away_hash,
+                ).first()
+
+                if home_spacing:
+                    features["home_spacing_area"] = home_spacing.hull_area / 50000.0  # Normalize
+                if away_spacing:
+                    features["away_spacing_area"] = away_spacing.hull_area / 50000.0
+
+            except (json.JSONDecodeError, TypeError, ImportError):
+                pass
+
+        # Derived features
+        features["is_playoff"] = 0.0  # Would need playoff flag in game table
+        features["is_neutral_site"] = 0.0
+
+        return self.build_from_dict(features)
 
     def build_from_dict(self, features: dict[str, float]) -> torch.Tensor:
         """Build context feature vector from a dictionary.

@@ -27,7 +27,7 @@ A Python CLI application that predicts NBA game outcomes using machine learning 
 | 1 | Project Foundation | ✅ Complete | 100% |
 | 2 | Data Collection | ✅ Complete | 100% |
 | 3 | Feature Engineering | ✅ Complete | 100% |
-| 4 | Model Architecture | 🔲 Not Started | 0% |
+| 4 | Model Architecture | ✅ Complete | 100% |
 | 5 | Backtesting Engine | 🔲 Not Started | 0% |
 | 6 | Self-Improvement | 🔲 Not Started | 0% |
 | 7 | Production Pipeline | 🔲 Not Started | 0% |
@@ -70,6 +70,26 @@ black . && ruff check . --fix && mypy nba_model/
 | `implementation/` | Implementation notes and artifacts |
 | `docs/` | GitHub Pages dashboard (static site) |
 | `data/` | Database + model weights (gitignored) |
+
+## Troubleshooting
+
+### OpenMP SHM Error on macOS
+
+If you encounter an OpenMP shared memory error when running tests or importing PyTorch:
+```
+OMP: Error #179: Function Can't open SHM2 failed
+```
+
+Try setting the following environment variables:
+```bash
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+```
+
+Or run tests with:
+```bash
+OMP_NUM_THREADS=1 pytest -v
+```
 
 ## Anti-Patterns
 
