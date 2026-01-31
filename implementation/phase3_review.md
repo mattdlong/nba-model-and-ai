@@ -1,68 +1,39 @@
-# Phase 3 Implementation Review (Codex)
+# Phase 3 Implementation Review - Loop 1 Re-Review
 
-Date: 2026-01-31
-Reviewer: Codex CLI
+**Date:** 2026-01-31
+**Scope:** Phase 3 feature engineering after Loop 1 fixes
 
 ## Requirements Compliance Checklist
 
-### Phase 3 Requirements (plan/phase3.md)
-- [x] RAPMCalculator implemented with sparse design matrix, time decay, min minutes, ridge regression, CV grid
-- [x] SpacingCalculator implemented with convex hull, centroid, corner density, KDE, gravity overlap
-- [x] FatigueCalculator implemented with haversine travel, schedule flags, arena coords
-- [x] EventParser implemented with regex patterns, turnover/shot parsing, shot clock categorization
-- [x] SeasonNormalizer implemented with fit/transform/save/load and season_stats persistence
-- [ ] features build CLI executes all feature calculators in required order (normalization -> RAPM -> spacing -> fatigue)
-- [ ] Season normalization defaults include all required metrics (pace, off/def rtg, efg%, tov%, orb%, ft rate, fg3a_rate, points_per_game)
-- [ ] Progress reporting uses tqdm as specified in phase3.md
-- [ ] Integration test for feature pipeline exists (tests/integration/test_feature_pipeline.py)
+- [x] RAPM calculator implemented with sparse design matrix, time-decay weighting, min-minutes filter, ridge regression, and lambda cross-validation. (`nba_model/features/rapm.py`)
+- [x] RAPM outputs persisted to `player_rapm` table in CLI pipeline. (`nba_model/cli.py`)
+- [x] Spatial convex hull spacing metrics (hull area, centroid, corner density, avg distance), KDE density maps, and gravity overlap implemented. (`nba_model/features/spatial.py`)
+- [!] `SpacingCalculator.min_shots` is not enforced in `calculate_lineup_spacing`; calculations proceed for any >=4 shots. (`nba_model/features/spatial.py`)
+- [x] Lineup spacing persisted to `lineup_spacing` table in CLI pipeline. (`nba_model/cli.py`)
+- [x] Fatigue calculator provides rest days, travel distance, schedule flags (B2B, 3-in-4, 4-in-5), and player load metrics with complete arena coordinates. (`nba_model/features/fatigue.py`)
+- [x] Event parser implements turnover classification, shot context parsing, and shot clock usage categorization. (`nba_model/features/parsing.py`)
+- [x] Season normalizer supports z-score by season, persistence, and required metrics including `fg3a_rate` and `points_per_game`. (`nba_model/features/normalization.py`)
+- [x] CLI `features build`, `features rapm`, and `features spatial` commands present; build order is normalization → RAPM → spacing → fatigue with tqdm progress. (`nba_model/cli.py`)
+- [x] Unit + integration tests for RAPM, spatial, fatigue, parsing, normalization, and feature pipeline present and passing. (`tests/unit/features/`, `tests/integration/test_feature_pipeline.py`)
+- [x] Coverage requirement met (>= 75% overall).
+- [!] Phase 3 spec says `transform()` should raise error on missing season; implementation warns and skips instead. (`nba_model/features/normalization.py`)
+- [!] Shot clock usage spec mentions inbound possession starts; implementation only handles rebounds/turnovers (and resets on made shots). (`nba_model/features/parsing.py`)
+- [!] CLAUDE.md accuracy: root claims 85% coverage target while test docs/guidelines specify 75% overall and 80% for new code. (`CLAUDE.md`, `tests/CLAUDE.md`, `DEVELOPMENT_GUIDELINES.md`)
 
-### Development Guidelines (DEVELOPMENT_GUIDELINES.md)
-- [x] Type hints present on new functions/classes
-- [x] Public functions/classes have docstrings
-- [x] Pytest passes
-- [x] Overall coverage >= 75%
-- [ ] Unit/integration coverage thresholds (80%/60%) explicitly verified (no split report)
+## Test Results & Coverage
 
-### CLAUDE.md Accuracy
-- [x] CLAUDE.md files present in root, plan, docs, templates, nba_model subpackages, tests
-- [ ] Root/feature CLAUDE.md declare Phase 3 complete, but outstanding requirements remain (see Issues)
+- `pytest tests/ -v`: **535 passed**, **1 warning** (SQLAlchemy identity conflict warning from `tests/unit/data/test_db.py`).
+- `pytest --cov=nba_model --cov-report=term-missing --cov-fail-under=75`: **79.32% total coverage** (requirement met).
+- Critical-path 90% coverage target (betting/prediction logic) not explicitly reported by tooling; no evidence of targeted enforcement beyond overall coverage.
 
-## Test Results and Coverage
+## Issues Found
 
-Commands run:
-- `pytest tests/ -v`
-- `pytest --cov=nba_model --cov-report=term --cov-fail-under=75`
-
-Results:
-- 526 tests passed
-- 1 warning: SAWarning in `tests/unit/data/test_db.py` about duplicate Team identity in a session
-- Coverage: 78.99% overall (threshold 75% met)
-
-Note: Coverage is reported overall; unit vs integration coverage split was not produced, so category thresholds (80% unit, 60% integration) cannot be verified from current output.
-
-## Code/Implementation Review Findings
-
-### Critical / High
-- None found
-
-### Medium
-- features build does not execute fatigue calculations despite docstring and Phase 3 requirement for normalization -> RAPM -> spacing -> fatigue pipeline. This is a functional gap in the CLI pipeline.
-  - File: `nba_model/cli.py:419`
-  - File: `nba_model/cli.py:475`
-- Season normalization defaults omit `fg3a_rate` and `points_per_game` required by Phase 3 targets. The CLI build step also only persists 7 metrics.
-  - File: `nba_model/features/normalization.py:33`
-  - File: `nba_model/cli.py:491`
-- Progress reporting uses Rich Progress instead of tqdm as specified in Phase 3. (Not a functional bug, but a spec deviation.)
-  - File: `nba_model/cli.py:475`
-
-### Low
-- Fatigue indicator keys use `three_in_four` / `four_in_five`, while phase3.md specifies `3_in_4` / `4_in_5`. API naming mismatch with requirements (tests align with current names, but requirement is not met verbatim).
-  - File: `nba_model/types.py:110`
-
-## Additional Notes
-- Imports succeed for `nba_model`, `nba_model.features`, `nba_model.data`, and `nba_model.cli`.
-- CLI help renders without error.
+- **UNRESOLVED:** Missing-season handling in season normalization diverges from Phase 3 requirement (should raise, currently warns and skips). (`nba_model/features/normalization.py`)
+- **UNRESOLVED:** Shot clock usage does not account for inbound possession starts as specified. (`nba_model/features/parsing.py`)
+- **UNRESOLVED:** `SpacingCalculator.min_shots` configuration is unused, so minimum sample thresholds rely on callers rather than the calculator. (`nba_model/features/spatial.py`)
+- **UNRESOLVED:** Coverage targets in CLAUDE docs are inconsistent (85% vs 75%/80%); needs alignment. (`CLAUDE.md`, `tests/CLAUDE.md`, `DEVELOPMENT_GUIDELINES.md`)
+- **RESOLVED (Loop 1):** Fatigue indicator keys updated to `3_in_4`/`4_in_5`, normalization defaults include `fg3a_rate`/`points_per_game`, features build now includes fatigue step and tqdm progress, and feature pipeline integration test added. (See latest commit)
 
 ## Overall Assessment
 
-Implementation is solid for the core feature engineering classes and unit tests, and overall test coverage meets the minimum threshold. However, the Phase 3 CLI pipeline is incomplete (fatigue not executed) and the season normalization metric list does not fully match the Phase 3 specification. Several Phase 3 testing requirements (integration pipeline test) and specification details (tqdm usage, fatigue naming) remain unfulfilled. As-is, Phase 3 should be considered partially complete pending these fixes.
+Phase 3 implementation is functionally complete and tests pass with acceptable coverage. The core feature engineering components (RAPM, spatial metrics, fatigue, parsing, normalization, and CLI integration) meet most requirements. Remaining gaps are limited to spec mismatches in normalization missing-season behavior, inbound possession handling for shot clock usage, and documentation consistency for coverage targets.
