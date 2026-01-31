@@ -146,7 +146,7 @@ class TestFatigueCalculator:
 
         indicators = calculator.calculate_schedule_flags(1610612738, today, games_df)
 
-        assert indicators["three_in_four"] is True
+        assert indicators["3_in_4"] is True
 
     def test_four_in_five_detection(
         self,
@@ -172,7 +172,7 @@ class TestFatigueCalculator:
 
         indicators = calculator.calculate_schedule_flags(1610612738, today, games_df)
 
-        assert indicators["four_in_five"] is True
+        assert indicators["4_in_5"] is True
 
     def test_not_three_in_four_when_only_two_games(
         self,
@@ -196,7 +196,7 @@ class TestFatigueCalculator:
 
         indicators = calculator.calculate_schedule_flags(1610612738, today, games_df)
 
-        assert indicators["three_in_four"] is False
+        assert indicators["3_in_4"] is False
 
     def test_home_stand_count(
         self,

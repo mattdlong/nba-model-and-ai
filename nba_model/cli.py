@@ -19,6 +19,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
+from tqdm import tqdm
 
 from nba_model import __version__
 from nba_model.config import get_settings
@@ -421,6 +422,7 @@ def features_build(
     Calculates RAPM, spacing metrics, fatigue indicators, and normalizations
     in dependency order: normalization -> RAPM -> spacing -> fatigue.
     """
+    import json
     from datetime import date
 
     import pandas as pd
@@ -437,6 +439,7 @@ def features_build(
         session_scope,
     )
     from nba_model.features import (
+        FatigueCalculator,
         RAPMCalculator,
         SeasonNormalizer,
         SpacingCalculator,
@@ -473,223 +476,258 @@ def features_build(
         )
 
         # Step 1: Season Normalization
-        console.print("\n[bold cyan]Step 1/3: Season Normalization[/bold cyan]")
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            progress.add_task("Calculating normalization stats...", total=None)
+        console.print("\n[bold cyan]Step 1/4: Season Normalization[/bold cyan]")
 
-            # Get game stats with season info
-            game_stats_query = (
-                session.query(GameStats, Game.season_id)
-                .join(Game, GameStats.game_id == Game.game_id)
-                .filter(Game.season_id.in_(seasons_to_process))
+        # Get game stats with season info
+        game_stats_query = (
+            session.query(GameStats, Game.season_id)
+            .join(Game, GameStats.game_id == Game.game_id)
+            .filter(Game.season_id.in_(seasons_to_process))
+        )
+
+        records = []
+        for gs, season_id in tqdm(
+            game_stats_query, desc="Collecting stats", leave=False
+        ):
+            # Calculate derived metrics
+            fg3a_rate = None
+            if gs.fga and gs.fga > 0 and gs.fg3a is not None:
+                fg3a_rate = gs.fg3a / gs.fga
+
+            records.append(
+                {
+                    "season_id": season_id,
+                    "pace": gs.pace,
+                    "offensive_rating": gs.offensive_rating,
+                    "defensive_rating": gs.defensive_rating,
+                    "efg_pct": gs.efg_pct,
+                    "tov_pct": gs.tov_pct,
+                    "orb_pct": gs.orb_pct,
+                    "ft_rate": gs.ft_rate,
+                    "fg3a_rate": fg3a_rate,
+                    "points_per_game": gs.points,
+                }
             )
 
-            records = []
-            for gs, season_id in game_stats_query:
-                records.append(
+        if records:
+            stats_df = pd.DataFrame(records)
+            normalizer = SeasonNormalizer()
+            normalizer.fit(stats_df)
+            normalizer.save_stats(session)
+            console.print(
+                f"  [green]Saved normalization stats for {len(seasons_to_process)} seasons[/green]"
+            )
+        else:
+            console.print("  [yellow]No game stats found[/yellow]")
+
+        # Step 2: RAPM Calculation
+        console.print("\n[bold cyan]Step 2/4: RAPM Calculation[/bold cyan]")
+        for season in tqdm(seasons_to_process, desc="Seasons", leave=False):
+            # Check if already exists
+            existing_count = (
+                session.query(func.count(PlayerRAPM.id))
+                .filter_by(season_id=season)
+                .scalar()
+            )
+
+            if existing_count > 0 and not force:
+                console.print(
+                    f"  [yellow]Season {season}: {existing_count} RAPM records exist (skipping)[/yellow]"
+                )
+                continue
+
+            # Clear existing if force
+            if force and existing_count > 0:
+                session.query(PlayerRAPM).filter_by(season_id=season).delete()
+                session.commit()
+
+            # Get stints for season
+            stints_query = (
+                session.query(Stint, Game.game_date)
+                .join(Game, Stint.game_id == Game.game_id)
+                .filter(Game.season_id == season)
+            )
+
+            stint_records = []
+            for stint, game_date in stints_query:
+                stint_records.append(
                     {
-                        "season_id": season_id,
-                        "pace": gs.pace,
-                        "offensive_rating": gs.offensive_rating,
-                        "defensive_rating": gs.defensive_rating,
-                        "efg_pct": gs.efg_pct,
-                        "tov_pct": gs.tov_pct,
-                        "orb_pct": gs.orb_pct,
-                        "ft_rate": gs.ft_rate,
+                        "home_lineup": stint.home_lineup,
+                        "away_lineup": stint.away_lineup,
+                        "home_points": stint.home_points,
+                        "away_points": stint.away_points,
+                        "possessions": stint.possessions or 1.0,
+                        "duration_seconds": stint.duration_seconds,
+                        "game_date": game_date,
                     }
                 )
 
-            if records:
-                stats_df = pd.DataFrame(records)
-                normalizer = SeasonNormalizer()
-                normalizer.fit(stats_df)
-                normalizer.save_stats(session)
+            if len(stint_records) < 100:
                 console.print(
-                    f"  [green]Saved normalization stats for {len(seasons_to_process)} seasons[/green]"
+                    f"  [yellow]Season {season}: Insufficient stints ({len(stint_records)})[/yellow]"
                 )
-            else:
-                console.print("  [yellow]No game stats found[/yellow]")
+                continue
 
-        # Step 2: RAPM Calculation
-        console.print("\n[bold cyan]Step 2/3: RAPM Calculation[/bold cyan]")
-        for season in seasons_to_process:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                progress.add_task(f"Calculating RAPM for {season}...", total=None)
+            stints_df = pd.DataFrame(stint_records)
+            try:
+                calculator = RAPMCalculator(lambda_=5000, min_minutes=100)
+                coefficients = calculator.fit(stints_df)
 
-                # Check if already exists
-                existing_count = (
-                    session.query(func.count(PlayerRAPM.id))
-                    .filter_by(season_id=season)
-                    .scalar()
-                )
-
-                if existing_count > 0 and not force:
-                    console.print(
-                        f"  [yellow]Season {season}: {existing_count} RAPM records exist (skipping)[/yellow]"
+                # Save to database
+                today = date.today()
+                for player_id, coef in coefficients.items():
+                    rapm_record = PlayerRAPM(
+                        player_id=player_id,
+                        season_id=season,
+                        calculation_date=today,
+                        orapm=coef["orapm"],
+                        drapm=coef["drapm"],
+                        rapm=coef["total_rapm"],
+                        sample_stints=coef["sample_stints"],
                     )
-                    continue
-
-                # Clear existing if force
-                if force and existing_count > 0:
-                    session.query(PlayerRAPM).filter_by(season_id=season).delete()
-                    session.commit()
-
-                # Get stints for season
-                stints_query = (
-                    session.query(Stint, Game.game_date)
-                    .join(Game, Stint.game_id == Game.game_id)
-                    .filter(Game.season_id == season)
-                )
-
-                stint_records = []
-                for stint, game_date in stints_query:
-                    stint_records.append(
-                        {
-                            "home_lineup": stint.home_lineup,
-                            "away_lineup": stint.away_lineup,
-                            "home_points": stint.home_points,
-                            "away_points": stint.away_points,
-                            "possessions": stint.possessions or 1.0,
-                            "duration_seconds": stint.duration_seconds,
-                            "game_date": game_date,
-                        }
-                    )
-
-                if len(stint_records) < 100:
-                    console.print(
-                        f"  [yellow]Season {season}: Insufficient stints ({len(stint_records)})[/yellow]"
-                    )
-                    continue
-
-                stints_df = pd.DataFrame(stint_records)
-                try:
-                    calculator = RAPMCalculator(lambda_=5000, min_minutes=100)
-                    coefficients = calculator.fit(stints_df)
-
-                    # Save to database
-                    today = date.today()
-                    for player_id, coef in coefficients.items():
-                        rapm_record = PlayerRAPM(
-                            player_id=player_id,
-                            season_id=season,
-                            calculation_date=today,
-                            orapm=coef["orapm"],
-                            drapm=coef["drapm"],
-                            rapm=coef["total_rapm"],
-                            sample_stints=coef["sample_stints"],
-                        )
-                        session.add(rapm_record)
-                    session.commit()
-                    console.print(
-                        f"  [green]Season {season}: Calculated RAPM for {len(coefficients)} players[/green]"
-                    )
-                except Exception as e:
-                    console.print(
-                        f"  [red]Season {season}: RAPM calculation failed: {e}[/red]"
-                    )
-
-        # Step 3: Spacing Metrics
-        console.print("\n[bold cyan]Step 3/3: Lineup Spacing[/bold cyan]")
-        for season in seasons_to_process:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                progress.add_task(f"Calculating spacing for {season}...", total=None)
-
-                # Check existing
-                existing_count = (
-                    session.query(func.count(LineupSpacing.id))
-                    .filter_by(season_id=season)
-                    .scalar()
-                )
-
-                if existing_count > 0 and not force:
-                    console.print(
-                        f"  [yellow]Season {season}: {existing_count} spacing records exist (skipping)[/yellow]"
-                    )
-                    continue
-
-                # Clear existing if force
-                if force and existing_count > 0:
-                    session.query(LineupSpacing).filter_by(season_id=season).delete()
-                    session.commit()
-
-                # Get shots for season
-                shots_query = (
-                    session.query(Shot.player_id, Shot.loc_x, Shot.loc_y)
-                    .join(Game, Shot.game_id == Game.game_id)
-                    .filter(Game.season_id == season)
-                )
-
-                shots_df = pd.DataFrame(
-                    [
-                        {"player_id": s[0], "loc_x": s[1], "loc_y": s[2]}
-                        for s in shots_query
-                    ]
-                )
-
-                if len(shots_df) < 100:
-                    console.print(
-                        f"  [yellow]Season {season}: Insufficient shots ({len(shots_df)})[/yellow]"
-                    )
-                    continue
-
-                # Get unique lineups from stints
-                stints = (
-                    session.query(Stint.home_lineup, Stint.away_lineup)
-                    .join(Game, Stint.game_id == Game.game_id)
-                    .filter(Game.season_id == season)
-                    .all()
-                )
-
-                import json
-
-                unique_lineups = set()
-                for home, away in stints:
-                    home_ids = tuple(
-                        sorted(json.loads(home) if isinstance(home, str) else home)
-                    )
-                    away_ids = tuple(
-                        sorted(json.loads(away) if isinstance(away, str) else away)
-                    )
-                    unique_lineups.add(home_ids)
-                    unique_lineups.add(away_ids)
-
-                calculator = SpacingCalculator(min_shots=20)
-                saved_count = 0
-
-                for lineup in unique_lineups:
-                    lineup_list = list(lineup)
-                    metrics = calculator.calculate_lineup_spacing(lineup_list, shots_df)
-
-                    if metrics["shot_count"] >= 20:
-                        lineup_hash = SpacingCalculator.compute_lineup_hash(lineup_list)
-                        spacing_record = LineupSpacing(
-                            season_id=season,
-                            lineup_hash=lineup_hash,
-                            player_ids=json.dumps(lineup_list),
-                            hull_area=metrics["hull_area"],
-                            centroid_x=metrics["centroid_x"],
-                            centroid_y=metrics["centroid_y"],
-                            shot_count=metrics["shot_count"],
-                        )
-                        session.add(spacing_record)
-                        saved_count += 1
-
+                    session.add(rapm_record)
                 session.commit()
                 console.print(
-                    f"  [green]Season {season}: Calculated spacing for {saved_count} lineups[/green]"
+                    f"  [green]Season {season}: Calculated RAPM for {len(coefficients)} players[/green]"
                 )
+            except Exception as e:
+                console.print(
+                    f"  [red]Season {season}: RAPM calculation failed: {e}[/red]"
+                )
+
+        # Step 3: Spacing Metrics
+        console.print("\n[bold cyan]Step 3/4: Lineup Spacing[/bold cyan]")
+        for season in tqdm(seasons_to_process, desc="Seasons", leave=False):
+            # Check existing
+            existing_count = (
+                session.query(func.count(LineupSpacing.id))
+                .filter_by(season_id=season)
+                .scalar()
+            )
+
+            if existing_count > 0 and not force:
+                console.print(
+                    f"  [yellow]Season {season}: {existing_count} spacing records exist (skipping)[/yellow]"
+                )
+                continue
+
+            # Clear existing if force
+            if force and existing_count > 0:
+                session.query(LineupSpacing).filter_by(season_id=season).delete()
+                session.commit()
+
+            # Get shots for season
+            shots_query = (
+                session.query(Shot.player_id, Shot.loc_x, Shot.loc_y)
+                .join(Game, Shot.game_id == Game.game_id)
+                .filter(Game.season_id == season)
+            )
+
+            shots_df = pd.DataFrame(
+                [{"player_id": s[0], "loc_x": s[1], "loc_y": s[2]} for s in shots_query]
+            )
+
+            if len(shots_df) < 100:
+                console.print(
+                    f"  [yellow]Season {season}: Insufficient shots ({len(shots_df)})[/yellow]"
+                )
+                continue
+
+            # Get unique lineups from stints
+            stints = (
+                session.query(Stint.home_lineup, Stint.away_lineup)
+                .join(Game, Stint.game_id == Game.game_id)
+                .filter(Game.season_id == season)
+                .all()
+            )
+
+            unique_lineups = set()
+            for home, away in stints:
+                home_ids = tuple(
+                    sorted(json.loads(home) if isinstance(home, str) else home)
+                )
+                away_ids = tuple(
+                    sorted(json.loads(away) if isinstance(away, str) else away)
+                )
+                unique_lineups.add(home_ids)
+                unique_lineups.add(away_ids)
+
+            calculator = SpacingCalculator(min_shots=20)
+            saved_count = 0
+
+            for lineup in tqdm(unique_lineups, desc=f"Lineups ({season})", leave=False):
+                lineup_list = list(lineup)
+                metrics = calculator.calculate_lineup_spacing(lineup_list, shots_df)
+
+                if metrics["shot_count"] >= 20:
+                    lineup_hash = SpacingCalculator.compute_lineup_hash(lineup_list)
+                    spacing_record = LineupSpacing(
+                        season_id=season,
+                        lineup_hash=lineup_hash,
+                        player_ids=json.dumps(lineup_list),
+                        hull_area=metrics["hull_area"],
+                        centroid_x=metrics["centroid_x"],
+                        centroid_y=metrics["centroid_y"],
+                        shot_count=metrics["shot_count"],
+                    )
+                    session.add(spacing_record)
+                    saved_count += 1
+
+            session.commit()
+            console.print(
+                f"  [green]Season {season}: Calculated spacing for {saved_count} lineups[/green]"
+            )
+
+        # Step 4: Fatigue Metrics
+        console.print("\n[bold cyan]Step 4/4: Fatigue Metrics[/bold cyan]")
+
+        # Get all games for fatigue calculation
+        games_query = (
+            session.query(Game)
+            .filter(Game.season_id.in_(seasons_to_process))
+            .order_by(Game.game_date)
+        )
+
+        games_list = games_query.all()
+        if not games_list:
+            console.print("  [yellow]No games found for fatigue calculation[/yellow]")
+        else:
+            # Build games DataFrame for fatigue calculator
+            games_df = pd.DataFrame(
+                [
+                    {
+                        "game_id": g.game_id,
+                        "game_date": g.game_date,
+                        "home_team_id": g.home_team_id,
+                        "away_team_id": g.away_team_id,
+                    }
+                    for g in games_list
+                ]
+            )
+
+            fatigue_calc = FatigueCalculator()
+            fatigue_count = 0
+
+            for game in tqdm(games_list, desc="Calculating fatigue", leave=False):
+                game_date = game.game_date
+                if hasattr(game_date, "date"):
+                    game_date = game_date.date()
+
+                # Calculate fatigue for home team
+                fatigue_calc.calculate_schedule_flags(
+                    game.home_team_id, game_date, games_df
+                )
+
+                # Calculate fatigue for away team
+                fatigue_calc.calculate_schedule_flags(
+                    game.away_team_id, game_date, games_df
+                )
+
+                fatigue_count += 2
+
+            console.print(
+                f"  [green]Calculated fatigue indicators for {fatigue_count} team-games[/green]"
+            )
 
     console.print("\n[bold green]Feature building complete![/bold green]")
 

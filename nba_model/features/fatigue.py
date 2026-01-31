@@ -354,15 +354,15 @@ class FatigueCalculator:
             team_id, game_date, games_df
         )
 
-        return FatigueIndicators(
-            rest_days=rest_days,
-            back_to_back=back_to_back,
-            three_in_four=three_in_four,
-            four_in_five=four_in_five,
-            travel_miles=travel_miles,
-            home_stand=home_stand,
-            road_trip=road_trip,
-        )
+        return {
+            "rest_days": rest_days,
+            "back_to_back": back_to_back,
+            "3_in_4": three_in_four,
+            "4_in_5": four_in_five,
+            "travel_miles": travel_miles,
+            "home_stand": home_stand,
+            "road_trip": road_trip,
+        }
 
     def _check_n_in_m_nights(
         self,

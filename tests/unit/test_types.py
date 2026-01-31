@@ -249,16 +249,16 @@ class TestFatigueIndicators:
         fatigue: FatigueIndicators = {
             "rest_days": 2,
             "back_to_back": False,
-            "three_in_four": False,
-            "four_in_five": False,
+            "3_in_4": False,
+            "4_in_5": False,
             "travel_miles": 1500.0,
             "home_stand": 3,
             "road_trip": 0,
         }
         assert fatigue["rest_days"] == 2
         assert fatigue["back_to_back"] is False
-        assert fatigue["three_in_four"] is False
-        assert fatigue["four_in_five"] is False
+        assert fatigue["3_in_4"] is False
+        assert fatigue["4_in_5"] is False
         assert fatigue["travel_miles"] == 1500.0
         assert fatigue["home_stand"] == 3
         assert fatigue["road_trip"] == 0

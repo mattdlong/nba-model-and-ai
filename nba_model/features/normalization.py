@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-# Metrics to normalize by default
+# Metrics to normalize by default (per Phase 3 spec)
 DEFAULT_METRICS_TO_NORMALIZE: list[str] = [
     "pace",
     "offensive_rating",
@@ -39,6 +39,8 @@ DEFAULT_METRICS_TO_NORMALIZE: list[str] = [
     "tov_pct",
     "orb_pct",
     "ft_rate",
+    "fg3a_rate",
+    "points_per_game",
 ]
 
 # Extended list including game-level metrics

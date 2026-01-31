@@ -107,16 +107,19 @@ class SpacingMetrics(TypedDict):
     shot_count: int
 
 
-class FatigueIndicators(TypedDict):
-    """Fatigue and rest metrics for a team."""
-
-    rest_days: int
-    back_to_back: bool
-    three_in_four: bool
-    four_in_five: bool
-    travel_miles: float
-    home_stand: int
-    road_trip: int
+# FatigueIndicators uses functional form because keys start with digits (3_in_4, 4_in_5)
+FatigueIndicators = TypedDict(
+    "FatigueIndicators",
+    {
+        "rest_days": int,
+        "back_to_back": bool,
+        "3_in_4": bool,
+        "4_in_5": bool,
+        "travel_miles": float,
+        "home_stand": int,
+        "road_trip": int,
+    },
+)
 
 
 class DriftResult(TypedDict):
