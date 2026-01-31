@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
+    from nba_model.backtest.engine import BacktestResult
     from nba_model.types import Bet
 
 # =============================================================================
@@ -100,6 +101,38 @@ class FullBacktestMetrics:
     loss_count: int = 0
     push_count: int = 0
 
+    def to_dict(self) -> dict[str, float | int | dict]:
+        """Convert metrics to dictionary format.
+
+        Returns:
+            Dictionary with all metric values.
+        """
+        return {
+            "total_return": self.total_return,
+            "cagr": self.cagr,
+            "avg_bet_return": self.avg_bet_return,
+            "volatility": self.volatility,
+            "sharpe_ratio": self.sharpe_ratio,
+            "sortino_ratio": self.sortino_ratio,
+            "max_drawdown": self.max_drawdown,
+            "max_drawdown_duration": self.max_drawdown_duration,
+            "total_bets": self.total_bets,
+            "win_rate": self.win_rate,
+            "avg_edge": self.avg_edge,
+            "avg_odds": self.avg_odds,
+            "roi": self.roi,
+            "brier_score": self.brier_score,
+            "log_loss": self.log_loss,
+            "avg_clv": self.avg_clv,
+            "clv_positive_rate": self.clv_positive_rate,
+            "metrics_by_type": self.metrics_by_type,
+            "total_wagered": self.total_wagered,
+            "total_profit": self.total_profit,
+            "win_count": self.win_count,
+            "loss_count": self.loss_count,
+            "push_count": self.push_count,
+        }
+
 
 @dataclass(frozen=True)
 class CLVResult:
@@ -141,6 +174,7 @@ class BacktestMetricsCalculator:
         bankroll_history: list[float] | None = None,
         initial_bankroll: float = 10000.0,
         closing_odds: dict[str, float] | None = None,
+        closing_odds_map: dict[tuple[str, str, str], float] | None = None,
     ) -> FullBacktestMetrics:
         """Calculate all performance metrics.
 
@@ -149,6 +183,9 @@ class BacktestMetricsCalculator:
             bankroll_history: Optional list of bankroll values over time.
             initial_bankroll: Initial bankroll for calculations.
             closing_odds: Optional dict mapping game_id to closing decimal odds.
+                         Deprecated: use closing_odds_map for proper CLV by bet type.
+            closing_odds_map: Optional dict mapping (game_id, bet_type, side) to
+                             closing decimal odds. Supports all bet types.
 
         Returns:
             FullBacktestMetrics with all computed metrics.
@@ -171,9 +208,15 @@ class BacktestMetricsCalculator:
         # Calculate calibration
         self._calculate_calibration(bets, metrics)
 
-        # Calculate CLV if closing odds provided
-        if closing_odds:
-            self._calculate_clv_metrics(bets, closing_odds, metrics)
+        # Calculate CLV - prefer closing_odds_map if available
+        if closing_odds_map:
+            self._calculate_clv_metrics_by_type(bets, closing_odds_map, metrics)
+        elif closing_odds:
+            # Legacy support: convert to map format (assumes home ML)
+            legacy_map: dict[tuple[str, str, str], float] = {}
+            for game_id, odds in closing_odds.items():
+                legacy_map[(game_id, "moneyline", "home")] = odds
+            self._calculate_clv_metrics_by_type(bets, legacy_map, metrics)
 
         # Calculate metrics by bet type
         metrics.metrics_by_type = self._calculate_metrics_by_type(bets)
@@ -361,12 +404,41 @@ class BacktestMetricsCalculator:
         closing_odds: dict[str, float],
         metrics: FullBacktestMetrics,
     ) -> None:
-        """Calculate closing line value metrics."""
+        """Calculate closing line value metrics (legacy version)."""
         clv_values = []
 
         for bet in bets:
             if bet.game_id in closing_odds:
                 closing_odd = closing_odds[bet.game_id]
+                result = self.calculate_clv(bet, closing_odd)
+                if result is not None:
+                    clv_values.append(result.clv)
+
+        if clv_values:
+            metrics.avg_clv = float(np.mean(clv_values))
+            metrics.clv_positive_rate = sum(1 for c in clv_values if c > 0) / len(
+                clv_values
+            )
+
+    def _calculate_clv_metrics_by_type(
+        self,
+        bets: list[Bet],
+        closing_odds_map: dict[tuple[str, str, str], float],
+        metrics: FullBacktestMetrics,
+    ) -> None:
+        """Calculate closing line value metrics for all bet types.
+
+        Args:
+            bets: List of bet objects.
+            closing_odds_map: Dict mapping (game_id, bet_type, side) to closing odds.
+            metrics: Metrics object to update.
+        """
+        clv_values = []
+
+        for bet in bets:
+            key = (bet.game_id, bet.bet_type, bet.side)
+            if key in closing_odds_map:
+                closing_odd = closing_odds_map[key]
                 result = self.calculate_clv(bet, closing_odd)
                 if result is not None:
                     clv_values.append(result.clv)
@@ -443,6 +515,36 @@ class BacktestMetricsCalculator:
             }
 
         return metrics_by_type
+
+    def calculate_from_result(
+        self,
+        result: BacktestResult,
+        closing_odds_map: dict[tuple[str, str, str], float] | None = None,
+    ) -> dict[str, float | int | dict]:
+        """Calculate all metrics from a BacktestResult object.
+
+        This is the spec-compliant API that takes a BacktestResult directly
+        and returns a dictionary of metrics.
+
+        Args:
+            result: BacktestResult object from walk-forward backtest.
+            closing_odds_map: Optional closing odds for CLV calculation.
+
+        Returns:
+            Dictionary containing all computed metrics.
+        """
+        initial_bankroll = (
+            result.config.initial_bankroll if result.config else 10000.0
+        )
+
+        metrics = self.calculate_all(
+            bets=result.bets,
+            bankroll_history=result.bankroll_history,
+            initial_bankroll=initial_bankroll,
+            closing_odds_map=closing_odds_map,
+        )
+
+        return metrics.to_dict()
 
     def generate_report(
         self,

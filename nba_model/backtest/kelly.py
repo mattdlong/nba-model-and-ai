@@ -230,6 +230,7 @@ class KellyCalculator:
         bankroll: float,
         model_prob: float,
         decimal_odds: float,
+        market_prob: float | None = None,
     ) -> KellyResult:
         """Calculate Kelly bet with full details.
 
@@ -237,6 +238,9 @@ class KellyCalculator:
             bankroll: Current bankroll in currency units.
             model_prob: Model's probability estimate (0 to 1).
             decimal_odds: Decimal odds (e.g., 1.91 for -110).
+            market_prob: Devigged market probability for edge calculation.
+                         If None, uses implied probability from odds (includes vig).
+                         For proper edge calculation, pass the devigged probability.
 
         Returns:
             KellyResult with full calculation details.
@@ -247,9 +251,18 @@ class KellyCalculator:
         if bankroll <= 0:
             raise InvalidInputError(f"Bankroll must be > 0, got {bankroll}")
 
-        # Calculate edge
-        implied_prob = 1.0 / decimal_odds
-        edge = model_prob - implied_prob
+        # Calculate edge using devigged market probability if provided
+        # Otherwise fall back to implied probability (includes vig) for backward compatibility
+        if market_prob is not None:
+            if not 0 < market_prob < 1:
+                raise InvalidInputError(
+                    f"Market probability must be in (0, 1), got {market_prob}"
+                )
+            edge = model_prob - market_prob
+        else:
+            # Legacy behavior: use implied probability with vig
+            implied_prob = 1.0 / decimal_odds
+            edge = model_prob - implied_prob
 
         # Calculate full Kelly
         full_kelly = self.calculate_full_kelly(model_prob, decimal_odds)

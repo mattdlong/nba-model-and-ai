@@ -442,19 +442,37 @@ class WalkForwardEngine:
         # Calculate metrics
         metrics_calc = BacktestMetricsCalculator()
 
-        # Get closing odds if available
-        closing_odds: dict[str, float] = {}
+        # Get closing odds if available - keyed by (game_id, bet_type, side)
+        closing_odds_map: dict[tuple[str, str, str], float] = {}
         if odds_provider:
             for bet in result.bets:
                 close = odds_provider.get_closing_odds(bet.game_id)
-                if close and "home_ml" in close:
-                    closing_odds[bet.game_id] = close["home_ml"]
+                if close:
+                    key = (bet.game_id, bet.bet_type, bet.side)
+                    if bet.bet_type == "moneyline":
+                        if bet.side == "home" and "home_ml" in close:
+                            closing_odds_map[key] = close["home_ml"]
+                        elif bet.side == "away" and "away_ml" in close:
+                            closing_odds_map[key] = close["away_ml"]
+                    elif bet.bet_type == "spread":
+                        # Spread bets use same odds structure as ML typically
+                        # Default to -110 (1.91) if not available
+                        if "spread_odds" in close:
+                            closing_odds_map[key] = close["spread_odds"]
+                        else:
+                            closing_odds_map[key] = 1.91
+                    elif bet.bet_type == "total":
+                        # Total bets (over/under) also typically -110
+                        if "total_odds" in close:
+                            closing_odds_map[key] = close["total_odds"]
+                        else:
+                            closing_odds_map[key] = 1.91
 
         result.metrics = metrics_calc.calculate_all(
             bets=result.bets,
             bankroll_history=result.bankroll_history,
             initial_bankroll=cfg.initial_bankroll,
-            closing_odds=closing_odds if closing_odds else None,
+            closing_odds_map=closing_odds_map if closing_odds_map else None,
         )
 
         # Set date range
@@ -590,7 +608,9 @@ class WalkForwardEngine:
 
         # Bet on side with best edge
         if home_edge >= config.min_edge_pct and home_edge >= away_edge:
-            kelly_result = kelly_calc.calculate(bankroll, model_home_prob, home_ml)
+            kelly_result = kelly_calc.calculate(
+                bankroll, model_home_prob, home_ml, market_prob=fair_probs.home
+            )
             if kelly_result.has_edge:
                 result_str = "win" if home_won else "loss"
                 profit = (
@@ -615,7 +635,9 @@ class WalkForwardEngine:
 
         elif away_edge >= config.min_edge_pct:
             model_away_prob = 1 - model_home_prob
-            kelly_result = kelly_calc.calculate(bankroll, model_away_prob, away_ml)
+            kelly_result = kelly_calc.calculate(
+                bankroll, model_away_prob, away_ml, market_prob=fair_probs.away
+            )
             if kelly_result.has_edge:
                 result_str = "win" if not home_won else "loss"
                 profit = (
@@ -670,10 +692,14 @@ class WalkForwardEngine:
         # Assume -110 lines for spread
         spread_odds = 1.91
 
-        home_edge = home_cover_prob - 0.5  # Against -110 line
+        # Market prob for -110 spread line is ~0.5 (devigged)
+        market_prob_spread = 0.5
+        home_edge = home_cover_prob - market_prob_spread
 
         if home_edge >= config.min_edge_pct:
-            kelly_result = kelly_calc.calculate(bankroll, home_cover_prob, spread_odds)
+            kelly_result = kelly_calc.calculate(
+                bankroll, home_cover_prob, spread_odds, market_prob=market_prob_spread
+            )
             if kelly_result.has_edge:
                 home_covered = margin > spread
                 result_str = "win" if home_covered else "loss"
@@ -721,14 +747,17 @@ class WalkForwardEngine:
         std_dev = 15.0  # Typical NBA total std dev
         over_prob = float(1 - norm.cdf((total_line - predicted_total) / std_dev))
 
-        # Assume -110 lines
+        # Assume -110 lines, market prob for total is ~0.5 (devigged)
         total_odds = 1.91
+        market_prob_total = 0.5
 
-        over_edge = over_prob - 0.5
-        under_edge = (1 - over_prob) - 0.5
+        over_edge = over_prob - market_prob_total
+        under_edge = (1 - over_prob) - market_prob_total
 
         if over_edge >= config.min_edge_pct and over_edge >= under_edge:
-            kelly_result = kelly_calc.calculate(bankroll, over_prob, total_odds)
+            kelly_result = kelly_calc.calculate(
+                bankroll, over_prob, total_odds, market_prob=market_prob_total
+            )
             if kelly_result.has_edge:
                 went_over = actual_total > total_line
                 result_str = "win" if went_over else "loss"
@@ -754,7 +783,9 @@ class WalkForwardEngine:
 
         elif under_edge >= config.min_edge_pct:
             under_prob = 1 - over_prob
-            kelly_result = kelly_calc.calculate(bankroll, under_prob, total_odds)
+            kelly_result = kelly_calc.calculate(
+                bankroll, under_prob, total_odds, market_prob=market_prob_total
+            )
             if kelly_result.has_edge:
                 went_under = actual_total < total_line
                 result_str = "win" if went_under else "loss"

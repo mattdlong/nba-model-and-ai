@@ -95,8 +95,9 @@ nba-model backtest optimize --metric sharpe
 
 ## Anti-Patterns
 
-- ❌ Never use full Kelly (always fractional, max 0.5x)
+- ❌ Avoid full Kelly - use fractional Kelly (recommended max 0.5x, code allows up to 1.0)
 - ❌ Never backtest without accounting for vig
 - ❌ Never look ahead in walk-forward validation
 - ❌ Never bet without minimum edge requirement
 - ❌ Never skip devigging when comparing to market odds
+- ❌ Never use implied probability (with vig) for edge calculation - use devigged market_prob

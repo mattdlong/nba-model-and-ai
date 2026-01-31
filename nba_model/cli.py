@@ -2222,6 +2222,9 @@ def backtest_report(
 
     Creates detailed performance analysis from backtest results.
     """
+    import json
+    from pathlib import Path
+
     from nba_model.backtest import BacktestMetricsCalculator, FullBacktestMetrics
 
     console.print(
@@ -2233,10 +2236,6 @@ def backtest_report(
 
     if result_file:
         console.print(f"Loading results from: {result_file}")
-        # Load and display stored results
-        import json
-        from pathlib import Path
-
         path = Path(result_file)
         if not path.exists():
             console.print(f"[red]File not found: {result_file}[/red]")
@@ -2245,7 +2244,52 @@ def backtest_report(
         with open(path) as f:
             data = json.load(f)
 
-        console.print("[yellow]Result file parsing not yet implemented.[/yellow]")
+        # Parse metrics from JSON
+        metrics_data = data.get("metrics", {})
+        metrics = FullBacktestMetrics(
+            total_return=metrics_data.get("total_return", 0.0),
+            cagr=metrics_data.get("cagr", 0.0),
+            avg_bet_return=metrics_data.get("avg_bet_return", 0.0),
+            volatility=metrics_data.get("volatility", 0.0),
+            sharpe_ratio=metrics_data.get("sharpe_ratio", 0.0),
+            sortino_ratio=metrics_data.get("sortino_ratio", 0.0),
+            max_drawdown=metrics_data.get("max_drawdown", 0.0),
+            max_drawdown_duration=metrics_data.get("max_drawdown_duration", 0),
+            total_bets=metrics_data.get("total_bets", 0),
+            win_rate=metrics_data.get("win_rate", 0.0),
+            avg_edge=metrics_data.get("avg_edge", 0.0),
+            avg_odds=metrics_data.get("avg_odds", 0.0),
+            roi=metrics_data.get("roi", 0.0),
+            brier_score=metrics_data.get("brier_score", 0.0),
+            log_loss=metrics_data.get("log_loss", 0.0),
+            avg_clv=metrics_data.get("avg_clv", 0.0),
+            clv_positive_rate=metrics_data.get("clv_positive_rate", 0.0),
+            metrics_by_type=metrics_data.get("metrics_by_type", {}),
+            total_wagered=metrics_data.get("total_wagered", 0.0),
+            total_profit=metrics_data.get("total_profit", 0.0),
+            win_count=metrics_data.get("win_count", 0),
+            loss_count=metrics_data.get("loss_count", 0),
+            push_count=metrics_data.get("push_count", 0),
+        )
+
+        # Generate report
+        calc = BacktestMetricsCalculator()
+        title = data.get("title", "Backtest Report")
+        report = calc.generate_report(metrics, title)
+        console.print(report)
+
+        # Show additional info from file
+        if "config" in data:
+            console.print("\n[bold]Configuration:[/bold]")
+            config = data["config"]
+            console.print(f"  Kelly Fraction: {config.get('kelly_fraction', 'N/A')}")
+            console.print(f"  Devig Method: {config.get('devig_method', 'N/A')}")
+            console.print(f"  Min Edge: {config.get('min_edge_pct', 'N/A')}")
+            console.print(f"  Max Bet: {config.get('max_bet_pct', 'N/A')}")
+
+        if "start_date" in data and "end_date" in data:
+            console.print(f"\n[bold]Period:[/bold] {data['start_date']} to {data['end_date']}")
+
     else:
         console.print("[yellow]No result file specified.[/yellow]")
         console.print("Run [cyan]nba-model backtest run[/cyan] first to generate results.")

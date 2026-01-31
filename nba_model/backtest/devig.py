@@ -153,7 +153,11 @@ def _shin_probabilities(z: float, odds: list[float]) -> list[float]:
     """Calculate true probabilities using Shin's formula.
 
     Uses the standard Shin (1991, 1992) formulation for betting markets.
-    The formula gives relative weights which are then normalized.
+    The formula calculates weights proportional to:
+    weight_i = sqrt(z² + 4(1-z)p_i) - z
+
+    These weights are then normalized to produce fair probabilities
+    that sum to 1.
 
     Args:
         z: Proportion of informed bettors (0 < z < 1).
@@ -165,15 +169,21 @@ def _shin_probabilities(z: float, odds: list[float]) -> list[float]:
     # Calculate implied probabilities
     implied = [1.0 / o for o in odds]
 
+    # Handle edge case of z very close to 0 or 1
+    if z <= 0.0001 or z >= 0.9999:
+        # Fallback to multiplicative for extreme z values
+        total_impl = sum(implied)
+        return [p / total_impl for p in implied]
+
     # Use the Shin weighting formula
-    # Weight_i proportional to: (sqrt(z^2 + 4(1-z)*p_i) - z)
+    # Weight_i proportional to: sqrt(z² + 4(1-z)p_i) - z
     weights = []
     for p_impl in implied:
         inner = z**2 + 4 * (1 - z) * p_impl
         w = np.sqrt(inner) - z
         weights.append(w)
 
-    # Normalize to get probabilities summing to 1
+    # Normalize weights to get probabilities summing to 1
     total_weight = sum(weights)
     if total_weight > 0:
         probs = [w / total_weight for w in weights]
@@ -191,16 +201,20 @@ def solve_shin_z(
 ) -> float:
     """Find Shin's z parameter (proportion of informed bettors).
 
-    In Shin's model, z approximates the market's overround for typical
-    betting markets. This is a practical simplification that works well
-    for most sports betting applications.
+    In Shin's model (1991, 1992), z represents the proportion of bettors
+    who are informed (have private information). For typical sports betting
+    markets, z is well-approximated by the market's overround.
+
+    The Shin probabilities are then calculated using the formula:
+    weight_i = sqrt(z² + 4(1-z)p_i) - z
+    And normalized to sum to 1.
 
     Args:
         odds: List of decimal odds.
         tol: Convergence tolerance (unused, kept for API compatibility).
 
     Returns:
-        The z parameter.
+        The z parameter (proportion of informed bettors).
 
     Raises:
         InvalidOddsError: If odds are invalid.
@@ -216,8 +230,10 @@ def solve_shin_z(
 
     # In Shin's model, z (proportion of informed bettors) is related to
     # the market's overround. For typical betting markets:
-    # z ≈ overround for small overround values
-    # We clamp to reasonable range for numerical stability
+    # z ≈ overround for small to moderate overround values
+    # This approximation is standard in the literature and works well
+    # for sports betting applications.
+    # Clamp to reasonable range for numerical stability
     z = min(max(overround, 0.001), 0.5)
 
     return z
