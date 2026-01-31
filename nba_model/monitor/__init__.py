@@ -15,14 +15,54 @@ Key concepts:
     - Retraining triggers: Automated model refresh decisions
 
 Example:
-    >>> from nba_model.monitor import DriftDetector
+    >>> from nba_model.monitor import DriftDetector, RetrainingTrigger
     >>> detector = DriftDetector(reference_data)
     >>> result = detector.check_drift(recent_data)
-    >>> if result['has_drift']:
+    >>> if result.has_drift:
     ...     print("Retraining recommended")
 """
 
 from __future__ import annotations
 
-# Public API - will be populated in Phase 6
-__all__: list[str] = []
+from nba_model.monitor.drift import (
+    MONITORED_FEATURES,
+    ConceptDriftDetector,
+    ConceptDriftResult,
+    DriftCheckResult,
+    DriftDetectionError,
+    DriftDetector,
+    FeatureDriftDetail,
+    InsufficientDataError,
+    KSTestResult,
+)
+from nba_model.monitor.triggers import (
+    RetrainingTrigger,
+    TriggerContext,
+    TriggerResult,
+)
+from nba_model.monitor.versioning import (
+    ModelVersionManager,
+    VersionComparisonResult,
+    VersionMetadata,
+)
+
+__all__ = [
+    "MONITORED_FEATURES",
+    "ConceptDriftDetector",
+    "ConceptDriftResult",
+    "DriftCheckResult",
+    "DriftDetectionError",
+    # drift.py
+    "DriftDetector",
+    "FeatureDriftDetail",
+    "InsufficientDataError",
+    "KSTestResult",
+    # versioning.py
+    "ModelVersionManager",
+    # triggers.py
+    "RetrainingTrigger",
+    "TriggerContext",
+    "TriggerResult",
+    "VersionComparisonResult",
+    "VersionMetadata",
+]
