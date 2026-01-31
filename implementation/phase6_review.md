@@ -150,51 +150,51 @@ The Loop 1 fixes addressed several structural gaps (metadata, ordering, tests, C
 
 ---
 
-## Loop 2 Results (Final)
+## Loop 2 Results (Final Verification)
 
 ### Resolved Issues
 
-1. **CLI monitor trigger uses placeholder recent_bets=[]** → **DOCUMENTED**
-   - Added TODO comment explaining bet history is not yet available
-   - Updated CLAUDE.md to document this as a known limitation
-   - Performance trigger will activate once Phase 7+ integration is complete
-   - File: `nba_model/cli.py`, `nba_model/monitor/CLAUDE.md`
+1. **CLI drift reference window doesn't use last training period** → **RESOLVED**
+   - `monitor drift` now reads `training_data_start`/`training_data_end` from model metadata when available
+   - Falls back to a heuristic window only when metadata is missing
+   - File: `nba_model/cli.py`
 
-2. **Live version comparison not implemented** → **RESOLVED**
-   - `_compute_metrics_on_data()` now computes accuracy and brier_score from test data
-   - Supports `win_prob` column for pre-computed predictions
-   - Falls back to stored metrics when test data is empty or missing required columns
-   - Added tests for live inference and empty data handling
-   - File: `nba_model/monitor/versioning.py`, `tests/unit/monitor/test_versioning.py`
-
-3. **CLAUDE.md claims completion prematurely** → **RESOLVED**
-   - Updated to "Phase 6 - Core Complete (with known limitations)"
-   - Documented three specific limitations:
-     - Performance trigger cannot activate (no bet history)
-     - Drift detection uses subset of features
-     - Version comparison uses dummy inputs without feature pipeline
+2. **CLAUDE.md claims completion prematurely** → **RESOLVED**
+   - `nba_model/monitor/CLAUDE.md` now reflects "Core Complete (with known limitations)"
+   - Limitations are listed explicitly
    - File: `nba_model/monitor/CLAUDE.md`
 
-4. **CLI drift reference window doesn't use last training period** → **RESOLVED**
-   - Now queries ModelRegistry for training metadata
-   - Uses `training_data_start` and `training_data_end` as reference period
-   - Falls back to heuristic only when no model metadata exists
-   - File: `nba_model/cli.py`
+### Partially Resolved / Documented Limitations
 
-5. **CLI drift only checks 3 features** → **DOCUMENTED**
-   - Removed `fg3a_rate` from queries (not available in GameStats)
-   - Now correctly queries `pace` and `offensive_rating` only
-   - Added TODO comments explaining that `rest_days`, `travel_distance`, `rapm_mean`, `fg3a_rate` require Phase 7+ feature computation pipeline
-   - File: `nba_model/cli.py`
+3. **CLI monitor trigger uses placeholder recent_bets=[]** → **DOCUMENTED LIMITATION**
+   - CLI still passes empty `recent_bets`, so performance trigger cannot activate from real bet history
+   - Limitation is documented and TODOs are present in CLI and module docs
+   - File: `nba_model/cli.py`, `nba_model/monitor/CLAUDE.md`
+
+4. **CLI drift feature coverage** → **DOCUMENTED LIMITATION**
+   - CLI only supplies `pace` and `offensive_rating` (other monitored features are not yet computed)
+   - Missing features are documented and TODOs are present
+   - File: `nba_model/cli.py`, `nba_model/monitor/CLAUDE.md`
+
+5. **Live version comparison implementation** → **PARTIALLY RESOLVED**
+   - `_compute_metrics_on_data()` now computes accuracy/Brier on `test_data`
+   - If `win_prob` exists, metrics are computed from that column (same predictions for both versions)
+   - If `win_prob` is missing, models are loaded and inference runs on dummy inputs (not real features)
+   - This meets the "runs inference" requirement in a limited form, but still lacks full feature-driven evaluation
+   - File: `nba_model/monitor/versioning.py`, `tests/unit/monitor/test_versioning.py`
+
+---
+
+## Documented Limitations Requiring Future Phases
+
+1. **Performance trigger needs bet history integration** (Phase 7+ pipeline/backtest output)
+2. **CLI drift monitoring only covers 2 of 6 monitored features** (feature pipeline integration)
+3. **Version comparison uses dummy inputs without feature pipeline** (true inference requires feature computation)
 
 ---
 
 ## Overall Assessment (Loop 2 - Final)
 
-**READY WITH DOCUMENTED LIMITATIONS**
+**NOT READY**
 
-All five issues from Loop 1 have been addressed:
-- Two issues (performance trigger, feature subset) are documented as known limitations requiring Phase 7+ integration
-- Three issues (live comparison, CLAUDE.md, reference window) have been fully resolved
-
-Phase 6 core functionality is complete. The documented limitations do not block progression to Phase 7, and will be naturally resolved during production pipeline integration.
+Phase 6 core classes exist, but two Phase 6 requirements remain incomplete in the CLI path (full monitored feature coverage and performance-trigger integration). Live version comparison is only partially implemented without feature-driven inference. These gaps are documented, but they still represent missing Phase 6 functionality per `plan/phase6.md`.
