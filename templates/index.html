@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}NBA Model - Dashboard{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <h1>NBA Model Dashboard</h1>
+    <div class="header-meta">
+        <span class="model-badge">Model v1.0.0</span>
+        <span class="status-badge status-healthy">Healthy</span>
+    </div>
+</div>
+
+<!-- Summary Stats Cards -->
+<section class="stats-cards">
+    <div class="stat-card">
+        <div class="stat-value">{{ summary.total_games|default(0) }}</div>
+        <div class="stat-label">Games Today</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ summary.total_signals|default(0) }}</div>
+        <div class="stat-label">Signals</div>
+    </div>
+    <div class="stat-card highlight">
+        <div class="stat-value">{{ summary.high_confidence_signals|default(0) }}</div>
+        <div class="stat-label">High Confidence</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ "%.1f%%"|format((summary.avg_edge|default(0)) * 100) }}</div>
+        <div class="stat-label">Avg Edge</div>
+    </div>
+</section>
+
+<!-- Top Signals Preview -->
+<section class="section">
+    <h2>Top Signals</h2>
+    {% if top_signals %}
+    <div class="signals-grid">
+        {% for signal in top_signals %}
+        <div class="signal-card confidence-{{ signal.confidence }}">
+            <div class="signal-header">
+                <span class="matchup">{{ signal.matchup }}</span>
+                <span class="confidence-badge {{ signal.confidence }}">{{ signal.confidence|upper }}</span>
+            </div>
+            <div class="signal-body">
+                <div class="bet-info">
+                    <strong>{{ signal.bet_type|upper }}</strong>
+                    <span>{{ signal.side|upper }}</span>
+                    {% if signal.line %}<span class="line">{{ signal.line }}</span>{% endif %}
+                </div>
+                <div class="edge-info">
+                    <span class="edge {{ 'positive' if signal.edge > 0 else 'negative' }}">
+                        {{ "%.1f%%"|format(signal.edge * 100) }} Edge
+                    </span>
+                    <span class="stake">{{ "%.2f%%"|format(signal.recommended_stake_pct * 100) }} Stake</span>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="no-data">No signals available for today</p>
+    {% endif %}
+    <a href="predictions.html" class="btn btn-primary">View All Predictions</a>
+</section>
+
+<!-- Bankroll Chart Placeholder -->
+<section class="section">
+    <h2>Bankroll Growth</h2>
+    <div class="chart-container">
+        <canvas id="bankrollChart"></canvas>
+    </div>
+</section>
+
+<!-- Quick Links -->
+<section class="quick-links">
+    <a href="predictions.html" class="quick-link">
+        <h3>Today's Predictions</h3>
+        <p>View detailed predictions for all games</p>
+    </a>
+    <a href="history.html" class="quick-link">
+        <h3>Performance History</h3>
+        <p>Track ROI, accuracy, and calibration</p>
+    </a>
+    <a href="model.html" class="quick-link">
+        <h3>Model Health</h3>
+        <p>Monitor drift and feature stability</p>
+    </a>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Load and render bankroll chart
+    loadBankrollChart('bankrollChart', 'api/performance.json');
+</script>
+{% endblock %}

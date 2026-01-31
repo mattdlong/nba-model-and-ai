@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+
+{% block title %}NBA Model - Model Health{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Model Health</h1>
+    <p class="subtitle">
+        Status:
+        <span class="status-badge status-{{ health.status|default('healthy') }}">
+            {{ health.status|default('healthy')|upper }}
+        </span>
+    </p>
+</div>
+
+<!-- Model Info Section -->
+<section class="section">
+    <h2>Model Information</h2>
+    <div class="model-info-grid">
+        <div class="info-card">
+            <h3>Architecture</h3>
+            <p>Two-Tower Fusion</p>
+            <ul>
+                <li>Transformer Encoder (128-dim)</li>
+                <li>GATv2 GNN (4 heads)</li>
+                <li>Multi-task outputs</li>
+            </ul>
+        </div>
+        <div class="info-card">
+            <h3>Current Version</h3>
+            <p class="version">{{ model_info.version|default('v1.0.0') }}</p>
+            <p class="training-date">
+                Trained: {{ model_info.training_date|default('N/A') }}
+            </p>
+        </div>
+        <div class="info-card">
+            <h3>Training Data</h3>
+            <p>{{ model_info.training_games|default('N/A') }} games</p>
+            <p>{{ model_info.training_data_start|default('N/A') }} to {{ model_info.training_data_end|default('N/A') }}</p>
+        </div>
+    </div>
+</section>
+
+<!-- Health Status Section -->
+<section class="section">
+    <h2>Health Status</h2>
+    <div class="health-summary">
+        <div class="health-indicator {{ 'warning' if health.drift_detected else 'healthy' }}">
+            <span class="indicator-icon">
+                {% if health.drift_detected %}
+                    <span style="color: #f59e0b;">&#x26A0;</span>
+                {% else %}
+                    <span style="color: #10b981;">&#x2713;</span>
+                {% endif %}
+            </span>
+            <span class="indicator-text">
+                {% if health.drift_detected %}
+                    Drift Detected in {{ health.features_drifted|length }} feature(s)
+                {% else %}
+                    No Drift Detected
+                {% endif %}
+            </span>
+        </div>
+
+        {% if health.retraining_recommended %}
+        <div class="retraining-alert">
+            <strong>Retraining Recommended</strong>
+            <p>{{ health.recommendation_reason }}</p>
+        </div>
+        {% endif %}
+    </div>
+</section>
+
+<!-- Feature Stability Section -->
+<section class="section">
+    <h2>Feature Stability</h2>
+    {% if health.feature_stability %}
+    <div class="table-responsive">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Feature</th>
+                    <th>Status</th>
+                    <th>KS Statistic</th>
+                    <th>P-Value</th>
+                    <th>PSI</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for feature, stats in health.feature_stability.items() %}
+                <tr class="{{ 'drifted' if stats.status == 'drifted' else '' }}">
+                    <td>{{ feature }}</td>
+                    <td>
+                        <span class="status-indicator {{ stats.status }}">
+                            {{ stats.status|upper }}
+                        </span>
+                    </td>
+                    <td>{{ "%.4f"|format(stats.ks_stat|default(0)) }}</td>
+                    <td>{{ "%.4f"|format(stats.p_value|default(1)) }}</td>
+                    <td class="{{ 'warning' if stats.psi > 0.1 else '' }} {{ 'danger' if stats.psi > 0.2 else '' }}">
+                        {{ "%.4f"|format(stats.psi|default(0)) }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="no-data">No feature stability data available</p>
+    {% endif %}
+</section>
+
+<!-- Recent Performance Section -->
+<section class="section">
+    <h2>Recent Performance</h2>
+    {% if health.recent_performance %}
+    <div class="metrics-grid">
+        {% for metric, value in health.recent_performance.items() %}
+        <div class="metric-item">
+            <span class="metric-label">{{ metric|replace('_', ' ')|title }}</span>
+            <span class="metric-value">
+                {% if metric in ['accuracy', 'roi', 'win_rate'] %}
+                    {{ "%.1f%%"|format(value * 100) }}
+                {% else %}
+                    {{ "%.4f"|format(value) }}
+                {% endif %}
+            </span>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="no-data">No recent performance data available</p>
+    {% endif %}
+</section>
+
+<!-- Drift Detection Thresholds -->
+<section class="section">
+    <h2>Monitoring Thresholds</h2>
+    <div class="thresholds-grid">
+        <div class="threshold-item">
+            <span class="threshold-name">KS Test P-Value</span>
+            <span class="threshold-value">&lt; 0.05</span>
+            <span class="threshold-desc">Indicates significant distribution shift</span>
+        </div>
+        <div class="threshold-item">
+            <span class="threshold-name">PSI</span>
+            <span class="threshold-value">&gt; 0.2</span>
+            <span class="threshold-desc">Significant population shift</span>
+        </div>
+        <div class="threshold-item">
+            <span class="threshold-name">Accuracy</span>
+            <span class="threshold-value">&lt; 48%</span>
+            <span class="threshold-desc">Below break-even threshold</span>
+        </div>
+        <div class="threshold-item">
+            <span class="threshold-name">Brier Score</span>
+            <span class="threshold-value">&gt; 0.28</span>
+            <span class="threshold-desc">Poor probability calibration</span>
+        </div>
+    </div>
+</section>
+{% endblock %}

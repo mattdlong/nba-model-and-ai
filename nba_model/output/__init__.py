@@ -5,6 +5,7 @@ for presenting predictions and performance metrics.
 
 Submodules:
     reports: Report generation (daily, performance, health)
+    charts: Chart data generation for visualizations
     dashboard: GitHub Pages static site builder
 
 Key concepts:
@@ -13,7 +14,7 @@ Key concepts:
     - Jinja2 templates for HTML rendering
 
 Example:
-    >>> from nba_model.output import DashboardBuilder
+    >>> from nba_model.output import DashboardBuilder, ReportGenerator, ChartGenerator
     >>> builder = DashboardBuilder(output_dir="docs")
     >>> builder.update_predictions(predictions, signals)
     >>> builder.build_full_site()
@@ -21,5 +22,37 @@ Example:
 
 from __future__ import annotations
 
-# Public API - will be populated in Phase 8
-__all__: list[str] = []
+from nba_model.output.charts import (
+    ChartGenerationError,
+    ChartGenerator,
+    InsufficientDataError as ChartInsufficientDataError,
+)
+from nba_model.output.dashboard import (
+    DashboardBuildError,
+    DashboardBuilder,
+    OutputWriteError,
+    TemplateLoadError,
+    build_dashboard,
+)
+from nba_model.output.reports import (
+    InvalidPeriodError,
+    ReportGenerationError,
+    ReportGenerator,
+)
+
+__all__: list[str] = [
+    # Reports
+    "ReportGenerator",
+    "ReportGenerationError",
+    "InvalidPeriodError",
+    # Charts
+    "ChartGenerator",
+    "ChartGenerationError",
+    "ChartInsufficientDataError",
+    # Dashboard
+    "DashboardBuilder",
+    "DashboardBuildError",
+    "TemplateLoadError",
+    "OutputWriteError",
+    "build_dashboard",
+]

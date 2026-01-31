@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+
+{% block title %}NBA Model - Performance History{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Performance History</h1>
+    <p class="subtitle">Period: {{ metrics.period|default('month')|title }}</p>
+</div>
+
+<!-- Performance Summary Cards -->
+<section class="stats-cards">
+    <div class="stat-card {{ 'positive' if (metrics.roi|default(0)) > 0 else 'negative' }}">
+        <div class="stat-value">{{ "%.1f%%"|format((metrics.roi|default(0)) * 100) }}</div>
+        <div class="stat-label">ROI</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ "%.1f%%"|format((metrics.accuracy|default(0)) * 100) }}</div>
+        <div class="stat-label">Win Rate</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ "%.2f%%"|format((metrics.clv|default(0)) * 100) }}</div>
+        <div class="stat-label">Avg CLV</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ metrics.total_predictions|default(0) }}</div>
+        <div class="stat-label">Total Bets</div>
+    </div>
+</section>
+
+<!-- Additional Metrics -->
+<section class="section">
+    <h2>Detailed Metrics</h2>
+    <div class="metrics-grid">
+        <div class="metric-item">
+            <span class="metric-label">Sharpe Ratio</span>
+            <span class="metric-value">{{ "%.2f"|format(metrics.sharpe_ratio|default(0)) }}</span>
+        </div>
+        <div class="metric-item">
+            <span class="metric-label">Max Drawdown</span>
+            <span class="metric-value negative">{{ "%.1f%%"|format((metrics.max_drawdown|default(0)) * 100) }}</span>
+        </div>
+        <div class="metric-item">
+            <span class="metric-label">Brier Score</span>
+            <span class="metric-value">{{ "%.4f"|format(metrics.brier_score|default(0)) }}</span>
+        </div>
+        <div class="metric-item">
+            <span class="metric-label">Total Wagered</span>
+            <span class="metric-value">${{ "%.0f"|format(metrics.total_wagered|default(0)) }}</span>
+        </div>
+        <div class="metric-item">
+            <span class="metric-label">Total Profit</span>
+            <span class="metric-value {{ 'positive' if (metrics.total_profit|default(0)) > 0 else 'negative' }}">
+                ${{ "%+.0f"|format(metrics.total_profit|default(0)) }}
+            </span>
+        </div>
+        <div class="metric-item">
+            <span class="metric-label">Win/Loss/Push</span>
+            <span class="metric-value">{{ metrics.win_count|default(0) }}/{{ metrics.loss_count|default(0) }}/{{ metrics.push_count|default(0) }}</span>
+        </div>
+    </div>
+</section>
+
+<!-- Charts Section -->
+<section class="section">
+    <h2>Performance Charts</h2>
+    <div class="charts-grid">
+        <div class="chart-wrapper">
+            <h3>ROI by Month</h3>
+            <div class="chart-container">
+                <canvas id="roiChart"></canvas>
+            </div>
+        </div>
+        <div class="chart-wrapper">
+            <h3>Calibration Curve</h3>
+            <div class="chart-container">
+                <canvas id="calibrationChart"></canvas>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Bet Type Breakdown -->
+<section class="section">
+    <h2>Performance by Bet Type</h2>
+    {% if metrics.by_bet_type %}
+    <div class="table-responsive">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Bet Type</th>
+                    <th>Count</th>
+                    <th>Win Rate</th>
+                    <th>ROI</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for bet_type, stats in metrics.by_bet_type.items() %}
+                <tr>
+                    <td>{{ bet_type|title }}</td>
+                    <td>{{ stats.count|default(0) }}</td>
+                    <td>{{ "%.1f%%"|format((stats.win_rate|default(0)) * 100) }}</td>
+                    <td class="{{ 'positive' if (stats.roi|default(0)) > 0 else 'negative' }}">
+                        {{ "%.1f%%"|format((stats.roi|default(0)) * 100) }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="no-data">No bet type breakdown available</p>
+    {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Load and render charts
+    loadROIChart('roiChart', 'api/performance.json');
+    loadCalibrationChart('calibrationChart', 'api/performance.json');
+</script>
+{% endblock %}

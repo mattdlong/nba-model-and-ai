@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block title %}NBA Model - Predictions{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Today's Predictions</h1>
+    <p class="subtitle">Generated: {{ generated_at }}</p>
+</div>
+
+<!-- Summary Stats -->
+<section class="stats-cards compact">
+    <div class="stat-card">
+        <div class="stat-value">{{ summary.total_games|default(0) }}</div>
+        <div class="stat-label">Games</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ summary.total_signals|default(0) }}</div>
+        <div class="stat-label">Signals</div>
+    </div>
+    <div class="stat-card highlight">
+        <div class="stat-value">{{ summary.high_confidence_signals|default(0) }}</div>
+        <div class="stat-label">High Conf</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ "%.2f%%"|format((summary.max_edge|default(0)) * 100) }}</div>
+        <div class="stat-label">Max Edge</div>
+    </div>
+</section>
+
+<!-- Signals Section -->
+<section class="section">
+    <h2>Betting Signals</h2>
+    {% if signals %}
+    <div class="table-responsive">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Matchup</th>
+                    <th>Bet</th>
+                    <th>Line</th>
+                    <th>Model Prob</th>
+                    <th>Market Prob</th>
+                    <th>Edge</th>
+                    <th>Stake</th>
+                    <th>Confidence</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for signal in signals %}
+                <tr class="signal-row confidence-{{ signal.confidence }}">
+                    <td class="matchup-cell">{{ signal.matchup }}</td>
+                    <td>{{ signal.bet_type }} {{ signal.side }}</td>
+                    <td>{{ signal.line if signal.line else '-' }}</td>
+                    <td>{{ "%.1f%%"|format(signal.model_prob * 100) }}</td>
+                    <td>{{ "%.1f%%"|format(signal.market_prob * 100) }}</td>
+                    <td class="{{ 'positive' if signal.edge > 0 else 'negative' }}">
+                        {{ "%.2f%%"|format(signal.edge * 100) }}
+                    </td>
+                    <td>{{ "%.2f%%"|format(signal.recommended_stake_pct * 100) }}</td>
+                    <td>
+                        <span class="confidence-badge {{ signal.confidence }}">
+                            {{ signal.confidence|upper }}
+                        </span>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="no-data">No betting signals for today</p>
+    {% endif %}
+</section>
+
+<!-- Game Predictions Section -->
+<section class="section">
+    <h2>All Game Predictions</h2>
+    {% if predictions %}
+    <div class="games-grid">
+        {% for game in predictions %}
+        <div class="game-card">
+            <div class="game-header">
+                <span class="game-date">{{ game.game_date }}</span>
+                <span class="confidence-meter" title="Confidence: {{ "%.0f%%"|format(game.confidence * 100) }}">
+                    <span class="meter-fill" style="width: {{ game.confidence * 100 }}%"></span>
+                </span>
+            </div>
+            <div class="game-matchup">
+                <div class="team away">{{ game.away_team }}</div>
+                <div class="at">@</div>
+                <div class="team home">{{ game.home_team }}</div>
+            </div>
+            <div class="game-predictions">
+                <div class="prediction-row">
+                    <span class="label">Home Win</span>
+                    <span class="value">{{ "%.1f%%"|format(game.home_win_prob_adjusted * 100) }}</span>
+                </div>
+                <div class="prediction-row">
+                    <span class="label">Spread</span>
+                    <span class="value {{ 'positive' if game.predicted_margin_adjusted > 0 else 'negative' }}">
+                        {{ "%+.1f"|format(game.predicted_margin_adjusted) }}
+                    </span>
+                </div>
+                <div class="prediction-row">
+                    <span class="label">Total</span>
+                    <span class="value">{{ "%.1f"|format(game.predicted_total_adjusted) }}</span>
+                </div>
+            </div>
+            {% if game.injury_uncertainty > 0.1 %}
+            <div class="injury-note">
+                Injury uncertainty: {{ "%.0f%%"|format(game.injury_uncertainty * 100) }}
+            </div>
+            {% endif %}
+            {% if game.top_factors %}
+            <div class="key-factors">
+                <strong>Key Factors:</strong>
+                <ul>
+                    {% for factor, importance in game.top_factors[:3] %}
+                    <li>{{ factor }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="no-data">No games scheduled for today</p>
+    {% endif %}
+</section>
+{% endblock %}

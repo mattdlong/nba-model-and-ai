@@ -3386,31 +3386,135 @@ def _display_single_prediction(prediction) -> None:
 
 
 @dashboard_app.command("build")
-def dashboard_build() -> None:
+def dashboard_build(
+    output_dir: Annotated[
+        str,
+        typer.Option("--output", "-o", help="Output directory for dashboard"),
+    ] = "docs",
+    template_dir: Annotated[
+        str,
+        typer.Option("--templates", "-t", help="Template directory"),
+    ] = "templates",
+) -> None:
     """Build GitHub Pages site.
 
     Generates static HTML/JSON for the dashboard.
     """
-    console.print(
-        Panel(
-            "[yellow]Dashboard building not yet implemented (Phase 8)[/yellow]",
-            title="Dashboard Build",
-        )
-    )
+    from nba_model.output import DashboardBuilder
+
+    console.print(Panel("Building Dashboard", title="Dashboard Build"))
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            progress.add_task("Building dashboard...", total=None)
+
+            builder = DashboardBuilder(
+                output_dir=output_dir,
+                template_dir=template_dir,
+            )
+            file_count = builder.build_full_site()
+
+        console.print(f"[green]Dashboard built successfully![/green]")
+        console.print(f"Created {file_count} files in '{output_dir}/'")
+        console.print(f"\nTo view locally, open: {output_dir}/index.html")
+
+    except Exception as e:
+        console.print(f"[red]Error building dashboard: {e}[/red]")
+        raise typer.Exit(1)
 
 
 @dashboard_app.command("deploy")
-def dashboard_deploy() -> None:
+def dashboard_deploy(
+    commit_message: Annotated[
+        str,
+        typer.Option("--message", "-m", help="Commit message"),
+    ] = "Update dashboard",
+) -> None:
     """Deploy to GitHub Pages.
 
-    Pushes built dashboard to gh-pages branch.
+    Commits and pushes docs/ directory to deploy via GitHub Pages.
+    Requires clean working directory.
     """
-    console.print(
-        Panel(
-            "[yellow]Dashboard deployment not yet implemented (Phase 8)[/yellow]",
-            title="Dashboard Deploy",
+    import subprocess
+
+    console.print(Panel("Deploying Dashboard", title="Dashboard Deploy"))
+
+    try:
+        # Check if docs/ exists
+        import os
+
+        if not os.path.exists("docs"):
+            console.print("[red]Error: docs/ directory not found. Run 'dashboard build' first.[/red]")
+            raise typer.Exit(1)
+
+        # Check for uncommitted changes in docs/
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "docs/"],
+            capture_output=True,
+            text=True,
         )
-    )
+
+        if not result.stdout.strip():
+            console.print("[yellow]No changes to deploy in docs/[/yellow]")
+            return
+
+        # Stage docs/ changes
+        console.print("Staging docs/ changes...")
+        subprocess.run(["git", "add", "docs/"], check=True)
+
+        # Commit
+        console.print(f"Committing with message: {commit_message}")
+        subprocess.run(
+            ["git", "commit", "-m", commit_message],
+            check=True,
+        )
+
+        # Push
+        console.print("Pushing to remote...")
+        subprocess.run(["git", "push"], check=True)
+
+        console.print("[green]Dashboard deployed successfully![/green]")
+
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Git operation failed: {e}[/red]")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Error deploying dashboard: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@dashboard_app.command("update")
+def dashboard_update() -> None:
+    """Update dashboard with latest predictions and performance.
+
+    Fetches today's predictions and updates the dashboard files.
+    """
+    from datetime import date
+
+    from nba_model.output import DashboardBuilder
+
+    console.print(Panel("Updating Dashboard", title="Dashboard Update"))
+
+    try:
+        builder = DashboardBuilder()
+
+        # Archive previous day's predictions
+        console.print("Archiving previous predictions...")
+        builder.archive_day()
+
+        # Initialize/update JSON files
+        console.print("Updating dashboard data...")
+        builder.build_full_site()
+
+        console.print(f"[green]Dashboard updated for {date.today()}[/green]")
+
+    except Exception as e:
+        console.print(f"[red]Error updating dashboard: {e}[/red]")
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":
