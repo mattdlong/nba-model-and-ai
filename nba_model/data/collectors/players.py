@@ -292,6 +292,48 @@ class PlayersCollector(BaseCollector):
         """
         super().__init__(api_client, db_session)
 
+    def collect(
+        self,
+        season_range: list[str],
+        resume_from: str | None = None,
+    ) -> tuple[list[Player], list[PlayerSeason]]:
+        """Collect players and player-seasons for a range of seasons.
+
+        Args:
+            season_range: List of season strings (e.g., ["2022-23", "2023-24"]).
+            resume_from: Optional season to resume from.
+
+        Returns:
+            Tuple of (all_players, all_player_seasons).
+        """
+        all_players: dict[int, Player] = {}
+        all_player_seasons: list[PlayerSeason] = []
+
+        # Handle resume_from
+        start_collecting = resume_from is None
+
+        for season in season_range:
+            if not start_collecting:
+                if season == resume_from:
+                    start_collecting = True
+                else:
+                    continue
+
+            self.logger.info(f"Collecting rosters for season {season}")
+            players, player_seasons = self.collect_rosters(season)
+
+            # Merge players (dedupe by ID)
+            for player in players:
+                if player.player_id not in all_players:
+                    all_players[player.player_id] = player
+
+            all_player_seasons.extend(player_seasons)
+
+            # Set checkpoint after each season
+            self.set_checkpoint(season)
+
+        return list(all_players.values()), all_player_seasons
+
     def collect_game(self, game_id: str) -> list[Player]:
         """Collect players for a single game.
 

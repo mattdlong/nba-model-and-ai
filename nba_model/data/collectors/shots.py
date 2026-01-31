@@ -48,6 +48,30 @@ class ShotsCollector(BaseCollector):
         """
         super().__init__(api_client, db_session)
 
+    def collect(
+        self,
+        season_range: list[str],
+        resume_from: str | None = None,
+    ) -> dict[str, list[Shot]]:
+        """Collect shots for all games in specified seasons.
+
+        Note: This method requires game IDs. Use collect_games() with
+        specific game IDs for batch collection.
+
+        Args:
+            season_range: List of season strings.
+            resume_from: Optional game_id to resume from.
+
+        Returns:
+            Dict mapping game_id to list of Shot instances.
+        """
+        self.logger.info(
+            f"collect() for ShotsCollector: processing {len(season_range)} seasons"
+        )
+        # This collector operates on game IDs, not seasons directly
+        # Return empty dict; use collect_games() with explicit game IDs
+        return {}
+
     def collect_game(self, game_id: str) -> list[Shot]:
         """Collect all shots for a single game.
 

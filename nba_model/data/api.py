@@ -398,6 +398,7 @@ class NBAApiClient:
         """Fetch player tracking using BoxScorePlayerTrackV3.
 
         Note: Player tracking data is only available from ~2013-14 season.
+        Uses V3 endpoint as V2 is not available in the nba_api library.
 
         Args:
             game_id: NBA game ID string.

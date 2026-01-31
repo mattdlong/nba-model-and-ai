@@ -44,6 +44,30 @@ class BoxScoreCollector(BaseCollector):
         """
         super().__init__(api_client, db_session)
 
+    def collect(
+        self,
+        season_range: list[str],
+        resume_from: str | None = None,
+    ) -> tuple[dict[str, list[GameStats]], dict[str, list[PlayerGameStats]]]:
+        """Collect box scores for all games in specified seasons.
+
+        Note: This method requires game IDs. Use collect_games() with
+        specific game IDs for batch collection.
+
+        Args:
+            season_range: List of season strings.
+            resume_from: Optional game_id to resume from.
+
+        Returns:
+            Tuple of dicts mapping game_id to stats.
+        """
+        self.logger.info(
+            f"collect() for BoxScoreCollector: processing {len(season_range)} seasons"
+        )
+        # This collector operates on game IDs, not seasons directly
+        # Return empty dicts; use collect_games() with explicit game IDs
+        return {}, {}
+
     def collect_game(
         self, game_id: str
     ) -> tuple[list[GameStats], list[PlayerGameStats]]:

@@ -467,3 +467,262 @@ class TestIncrementalUpdate:
 
                             assert result.status == PipelineStatus.COMPLETED
                             assert result.games_processed == 0
+
+
+class TestCollectGameBatch:
+    """Tests for _collect_game_batch method."""
+
+    @pytest.fixture
+    def mock_session(self) -> MagicMock:
+        """Create a mock database session."""
+        session = MagicMock()
+        return session
+
+    @pytest.fixture
+    def mock_api_client(self) -> MagicMock:
+        """Create a mock API client."""
+        return MagicMock()
+
+    @pytest.fixture
+    def mock_checkpoint_manager(self) -> MagicMock:
+        """Create a mock checkpoint manager."""
+        return MagicMock()
+
+    def test_returns_batch_result(
+        self,
+        mock_session: MagicMock,
+        mock_api_client: MagicMock,
+        mock_checkpoint_manager: MagicMock,
+    ) -> None:
+        """Should return BatchResult."""
+        with patch("nba_model.data.collectors.GamesCollector"):
+            with patch("nba_model.data.collectors.PlayersCollector"):
+                with patch("nba_model.data.collectors.PlayByPlayCollector") as mock_pbp:
+                    with patch("nba_model.data.collectors.ShotsCollector") as mock_shots:
+                        with patch(
+                            "nba_model.data.collectors.BoxScoreCollector"
+                        ) as mock_box:
+                            # Configure mocks
+                            mock_pbp.return_value.collect_game.return_value = []
+                            mock_shots.return_value.collect_game.return_value = []
+                            mock_box.return_value.collect_game.return_value = ([], [])
+
+                            pipeline = CollectionPipeline(
+                                session=mock_session,
+                                api_client=mock_api_client,
+                                checkpoint_manager=mock_checkpoint_manager,
+                            )
+
+                            result = pipeline._collect_game_batch(["0022300001"])
+
+                            assert isinstance(result, BatchResult)
+                            assert "0022300001" in result.game_ids
+
+    def test_handles_empty_batch(
+        self,
+        mock_session: MagicMock,
+        mock_api_client: MagicMock,
+        mock_checkpoint_manager: MagicMock,
+    ) -> None:
+        """Should handle empty game batch."""
+        with patch("nba_model.data.collectors.GamesCollector"):
+            with patch("nba_model.data.collectors.PlayersCollector"):
+                with patch("nba_model.data.collectors.PlayByPlayCollector"):
+                    with patch("nba_model.data.collectors.ShotsCollector"):
+                        with patch("nba_model.data.collectors.BoxScoreCollector"):
+                            pipeline = CollectionPipeline(
+                                session=mock_session,
+                                api_client=mock_api_client,
+                                checkpoint_manager=mock_checkpoint_manager,
+                            )
+
+                            result = pipeline._collect_game_batch([])
+
+                            assert isinstance(result, BatchResult)
+                            assert result.game_ids == []
+
+    def test_records_errors(
+        self,
+        mock_session: MagicMock,
+        mock_api_client: MagicMock,
+        mock_checkpoint_manager: MagicMock,
+    ) -> None:
+        """Should record errors when collection fails."""
+        with patch("nba_model.data.collectors.GamesCollector"):
+            with patch("nba_model.data.collectors.PlayersCollector"):
+                with patch("nba_model.data.collectors.PlayByPlayCollector") as mock_pbp:
+                    with patch("nba_model.data.collectors.ShotsCollector") as mock_shots:
+                        with patch(
+                            "nba_model.data.collectors.BoxScoreCollector"
+                        ) as mock_box:
+                            # Configure mock to raise exception
+                            mock_pbp.return_value.collect_game.side_effect = Exception(
+                                "API error"
+                            )
+                            mock_shots.return_value.collect_game.return_value = []
+                            mock_box.return_value.collect_game.return_value = ([], [])
+
+                            pipeline = CollectionPipeline(
+                                session=mock_session,
+                                api_client=mock_api_client,
+                                checkpoint_manager=mock_checkpoint_manager,
+                            )
+
+                            result = pipeline._collect_game_batch(["0022300001"])
+
+                            # Should have recorded error
+                            assert len(result.errors) > 0
+
+
+class TestCollectTeamsAndRosters:
+    """Tests for _collect_teams_and_rosters method."""
+
+    @pytest.fixture
+    def mock_session(self) -> MagicMock:
+        """Create a mock database session."""
+        return MagicMock()
+
+    @pytest.fixture
+    def mock_api_client(self) -> MagicMock:
+        """Create a mock API client."""
+        return MagicMock()
+
+    @pytest.fixture
+    def mock_checkpoint_manager(self) -> MagicMock:
+        """Create a mock checkpoint manager."""
+        return MagicMock()
+
+    def test_collects_teams_for_season(
+        self,
+        mock_session: MagicMock,
+        mock_api_client: MagicMock,
+        mock_checkpoint_manager: MagicMock,
+    ) -> None:
+        """Should collect teams for given season."""
+        with patch("nba_model.data.collectors.GamesCollector"):
+            with patch("nba_model.data.collectors.PlayersCollector") as mock_players:
+                with patch("nba_model.data.collectors.PlayByPlayCollector"):
+                    with patch("nba_model.data.collectors.ShotsCollector"):
+                        with patch("nba_model.data.collectors.BoxScoreCollector"):
+                            # Configure mock
+                            mock_players.return_value.collect_teams.return_value = []
+                            mock_players.return_value.collect_rosters.return_value = (
+                                [],
+                                [],
+                            )
+
+                            pipeline = CollectionPipeline(
+                                session=mock_session,
+                                api_client=mock_api_client,
+                                checkpoint_manager=mock_checkpoint_manager,
+                            )
+
+                            pipeline._collect_teams_and_rosters("2023-24")
+
+                            # Should have called collect_teams
+                            mock_players.return_value.collect_teams.assert_called_once()
+
+
+class TestSeptember:
+    """Tests for _get_current_season with September edge case."""
+
+    @pytest.fixture
+    def mock_session(self) -> MagicMock:
+        """Create a mock database session."""
+        return MagicMock()
+
+    @pytest.fixture
+    def mock_api_client(self) -> MagicMock:
+        """Create a mock API client."""
+        return MagicMock()
+
+    @pytest.fixture
+    def mock_checkpoint_manager(self) -> MagicMock:
+        """Create a mock checkpoint manager."""
+        return MagicMock()
+
+    @pytest.fixture
+    def pipeline(
+        self,
+        mock_session: MagicMock,
+        mock_api_client: MagicMock,
+        mock_checkpoint_manager: MagicMock,
+    ) -> CollectionPipeline:
+        """Create a pipeline with mocked dependencies."""
+        with patch("nba_model.data.collectors.GamesCollector"):
+            with patch("nba_model.data.collectors.PlayersCollector"):
+                with patch("nba_model.data.collectors.PlayByPlayCollector"):
+                    with patch("nba_model.data.collectors.ShotsCollector"):
+                        with patch("nba_model.data.collectors.BoxScoreCollector"):
+                            return CollectionPipeline(
+                                session=mock_session,
+                                api_client=mock_api_client,
+                                checkpoint_manager=mock_checkpoint_manager,
+                            )
+
+    def test_september_before_new_season(self, pipeline: CollectionPipeline) -> None:
+        """September should still be in previous season."""
+        with patch("nba_model.data.pipelines.date") as mock_date:
+            mock_date.today.return_value = date(2024, 9, 15)
+            mock_date.side_effect = lambda *args, **kwargs: date(*args, **kwargs)
+
+            season = pipeline._get_current_season()
+            # September is before October, so still in 2023-24 season
+            assert season == "2023-24"
+
+    def test_november_in_new_season(self, pipeline: CollectionPipeline) -> None:
+        """November should be in new season."""
+        with patch("nba_model.data.pipelines.date") as mock_date:
+            mock_date.today.return_value = date(2024, 11, 15)
+            mock_date.side_effect = lambda *args, **kwargs: date(*args, **kwargs)
+
+            season = pipeline._get_current_season()
+            assert season == "2024-25"
+
+
+class TestValidateAndCommitBatch:
+    """Tests for _validate_batch and _commit_batch methods."""
+
+    @pytest.fixture
+    def mock_session(self) -> MagicMock:
+        """Create a mock database session."""
+        return MagicMock()
+
+    @pytest.fixture
+    def mock_api_client(self) -> MagicMock:
+        """Create a mock API client."""
+        return MagicMock()
+
+    @pytest.fixture
+    def mock_checkpoint_manager(self) -> MagicMock:
+        """Create a mock checkpoint manager."""
+        return MagicMock()
+
+    def test_commit_batch_adds_objects(
+        self,
+        mock_session: MagicMock,
+        mock_api_client: MagicMock,
+        mock_checkpoint_manager: MagicMock,
+    ) -> None:
+        """Should add objects to session."""
+        with patch("nba_model.data.collectors.GamesCollector"):
+            with patch("nba_model.data.collectors.PlayersCollector"):
+                with patch("nba_model.data.collectors.PlayByPlayCollector"):
+                    with patch("nba_model.data.collectors.ShotsCollector"):
+                        with patch("nba_model.data.collectors.BoxScoreCollector"):
+                            pipeline = CollectionPipeline(
+                                session=mock_session,
+                                api_client=mock_api_client,
+                                checkpoint_manager=mock_checkpoint_manager,
+                            )
+
+                            batch = BatchResult(
+                                game_ids=["0022300001"],
+                                plays=[{"id": 1}],  # Mock play object
+                                shots=[{"id": 1}],  # Mock shot object
+                            )
+
+                            pipeline._commit_batch(batch)
+
+                            # Session methods should be called
+                            mock_session.commit.assert_called()

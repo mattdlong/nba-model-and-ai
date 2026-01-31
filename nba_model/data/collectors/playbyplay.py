@@ -251,7 +251,9 @@ class PlayByPlayCollector(BaseCollector):
         return None, None
 
     def _extract_player_ids(
-        self, row: pd.Series
+        self,
+        row: pd.Series,
+        player_name_to_id: dict[str, int] | None = None,
     ) -> tuple[int | None, int | None, int | None]:
         """Extract player IDs from event data.
 
@@ -260,6 +262,7 @@ class PlayByPlayCollector(BaseCollector):
 
         Args:
             row: DataFrame row.
+            player_name_to_id: Optional mapping of player names to IDs for fallback.
 
         Returns:
             Tuple of (player1_id, player2_id, player3_id).
@@ -267,6 +270,25 @@ class PlayByPlayCollector(BaseCollector):
         player1_id = self._safe_int(row.get("PLAYER1_ID"))
         player2_id = self._safe_int(row.get("PLAYER2_ID"))
         player3_id = self._safe_int(row.get("PLAYER3_ID"))
+
+        # Fallback to description parsing when explicit IDs are missing
+        if player_name_to_id and player1_id is None:
+            # Try home description first, then away, then neutral
+            for desc_field in ["HOMEDESCRIPTION", "VISITORDESCRIPTION", "NEUTRALDESCRIPTION"]:
+                description = row.get(desc_field)
+                if description and not pd.isna(description):
+                    extracted_ids = self.extract_player_references_from_description(
+                        str(description), player_name_to_id
+                    )
+                    if extracted_ids:
+                        # Assign extracted IDs to missing slots
+                        if player1_id is None and len(extracted_ids) >= 1:
+                            player1_id = extracted_ids[0]
+                        if player2_id is None and len(extracted_ids) >= 2:
+                            player2_id = extracted_ids[1]
+                        if player3_id is None and len(extracted_ids) >= 3:
+                            player3_id = extracted_ids[2]
+                        break
 
         return player1_id, player2_id, player3_id
 

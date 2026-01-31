@@ -26,7 +26,7 @@ All collectors inherit from `BaseCollector`:
 
 ```python
 class BaseCollector(ABC):
-    def __init__(self, api: NBAApiClient, db: Session) -> None: ...
+    def __init__(self, api_client: NBAApiClient, db_session: Session | None = None) -> None: ...
 
     def collect(self, season_range: list[str], resume_from: str | None = None) -> Any: ...
 
@@ -40,8 +40,8 @@ class BaseCollector(ABC):
 ## Common Tasks
 
 - **Add new collector:** Copy existing, inherit `BaseCollector`, implement abstract methods
-- **Handle rate limits:** Use `self.api.request()` which handles delays
-- **Resume collection:** Check `get_checkpoint()` before starting
+- **Handle rate limits:** Use `self.api` (NBAApiClient) which handles delays
+- **Resume collection:** Check `get_last_checkpoint()` before starting
 
 ## Anti-Patterns
 

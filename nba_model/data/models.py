@@ -21,7 +21,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from nba_model.data.schema import Base, TimestampMixin
@@ -521,8 +521,8 @@ class Stint(Base):
     start_time: Mapped[str] = mapped_column(String(10), nullable=False)
     end_time: Mapped[str] = mapped_column(String(10), nullable=False)
     duration_seconds: Mapped[int] = mapped_column(nullable=False)
-    home_lineup: Mapped[str] = mapped_column(String(100), nullable=False)  # JSON array
-    away_lineup: Mapped[str] = mapped_column(String(100), nullable=False)  # JSON array
+    home_lineup: Mapped[str] = mapped_column(Text, nullable=False)  # JSON array
+    away_lineup: Mapped[str] = mapped_column(Text, nullable=False)  # JSON array
     home_points: Mapped[int] = mapped_column(nullable=False)
     away_points: Mapped[int] = mapped_column(nullable=False)
     possessions: Mapped[float | None] = mapped_column(nullable=True)

@@ -27,7 +27,7 @@ Owns all data acquisition, storage, and retrieval for NBA statistics. Single sou
 
 - `NBAApiClient` - Rate-limited API wrapper (0.6s delay, 3 retries)
 - `Game`, `Player`, `Stint`, `Shot`, `Play` - SQLAlchemy ORM models
-- `DataPipeline` - Orchestrates collection with checkpointing
+- `CollectionPipeline` - Orchestrates collection with checkpointing
 - `StintDeriver` - Derives lineup stints from play-by-play
 - `DataValidator` - Validates collected data batches
 

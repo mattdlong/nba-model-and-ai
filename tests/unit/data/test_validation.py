@@ -384,3 +384,345 @@ class TestValidateStints:
         result = validator.validate_stints(session, "0022300001")
 
         assert any("no stint data" in w for w in result.warnings)
+
+    def test_wrong_team_count_returns_error(self, validator: DataValidator) -> None:
+        """Should error when stints have wrong team count."""
+        from unittest.mock import MagicMock
+
+        session = MagicMock()
+
+        # Create mock stint for only one team
+        mock_stint = MagicMock()
+        mock_stint.team_id = 1
+        mock_stint.start_time = 0
+        mock_stint.end_time = 100
+        mock_stint.lineup_json = '["1", "2", "3", "4", "5"]'
+
+        session.query.return_value.filter.return_value.all.return_value = [mock_stint]
+
+        result = validator.validate_stints(session, "0022300001")
+
+        assert result.valid is False
+        assert any("teams" in e for e in result.errors)
+
+    def test_overlapping_stints_returns_error(self, validator: DataValidator) -> None:
+        """Should error when stints overlap."""
+        from unittest.mock import MagicMock
+
+        session = MagicMock()
+
+        # Create overlapping stints for same team
+        stint1 = MagicMock()
+        stint1.team_id = 1
+        stint1.start_time = 0
+        stint1.end_time = 200  # Overlaps with stint2
+        stint1.lineup_json = '["1", "2", "3", "4", "5"]'
+
+        stint2 = MagicMock()
+        stint2.team_id = 1
+        stint2.start_time = 100  # Starts before stint1 ends
+        stint2.end_time = 300
+        stint2.lineup_json = '["1", "2", "3", "4", "5"]'
+
+        # Need two teams
+        stint3 = MagicMock()
+        stint3.team_id = 2
+        stint3.start_time = 0
+        stint3.end_time = 100
+        stint3.lineup_json = '["6", "7", "8", "9", "10"]'
+
+        session.query.return_value.filter.return_value.all.return_value = [
+            stint1,
+            stint2,
+            stint3,
+        ]
+
+        result = validator.validate_stints(session, "0022300001")
+
+        assert result.valid is False
+        assert any("overlapping" in e for e in result.errors)
+
+    def test_invalid_lineup_size_returns_error(self, validator: DataValidator) -> None:
+        """Should error when lineup has wrong number of players."""
+        from unittest.mock import MagicMock
+
+        session = MagicMock()
+
+        # Create stint with wrong lineup size
+        stint1 = MagicMock()
+        stint1.team_id = 1
+        stint1.start_time = 0
+        stint1.end_time = 100
+        stint1.lineup_json = '["1", "2", "3", "4"]'  # Only 4 players
+
+        stint2 = MagicMock()
+        stint2.team_id = 2
+        stint2.start_time = 0
+        stint2.end_time = 100
+        stint2.lineup_json = '["6", "7", "8", "9", "10"]'
+
+        session.query.return_value.filter.return_value.all.return_value = [stint1, stint2]
+
+        result = validator.validate_stints(session, "0022300001")
+
+        assert result.valid is False
+        assert any("players" in e for e in result.errors)
+
+    def test_invalid_lineup_json_returns_error(self, validator: DataValidator) -> None:
+        """Should error when lineup JSON is invalid."""
+        from unittest.mock import MagicMock
+
+        session = MagicMock()
+
+        # Create stint with invalid JSON
+        stint1 = MagicMock()
+        stint1.team_id = 1
+        stint1.start_time = 0
+        stint1.end_time = 100
+        stint1.lineup_json = "not valid json"
+
+        stint2 = MagicMock()
+        stint2.team_id = 2
+        stint2.start_time = 0
+        stint2.end_time = 100
+        stint2.lineup_json = '["6", "7", "8", "9", "10"]'
+
+        session.query.return_value.filter.return_value.all.return_value = [stint1, stint2]
+
+        result = validator.validate_stints(session, "0022300001")
+
+        assert result.valid is False
+        assert any("invalid lineup JSON" in e for e in result.errors)
+
+
+class TestValidateReferentialIntegrity:
+    """Tests for validate_referential_integrity method."""
+
+    @pytest.fixture
+    def validator(self) -> DataValidator:
+        """Create a validator instance."""
+        return DataValidator()
+
+    def test_valid_data_returns_valid(self, validator: DataValidator) -> None:
+        """Should return valid for consistent data."""
+        from unittest.mock import MagicMock
+
+        session = MagicMock()
+        # All queries return 0 orphans
+        session.query.return_value.outerjoin.return_value.filter.return_value.count.return_value = (
+            0
+        )
+
+        result = validator.validate_referential_integrity(session)
+
+        assert result.valid is True
+
+    def test_orphan_home_teams_returns_error(self, validator: DataValidator) -> None:
+        """Should error when games have invalid home_team_id."""
+        from unittest.mock import MagicMock
+
+        session = MagicMock()
+        # First query returns orphans, rest return 0
+        session.query.return_value.outerjoin.return_value.filter.return_value.count.side_effect = [
+            5,  # orphan home teams
+            0,  # orphan away teams
+            0,  # orphan player stats
+            0,  # orphan shots
+        ]
+
+        result = validator.validate_referential_integrity(session)
+
+        assert result.valid is False
+        assert any("home_team_id" in e for e in result.errors)
+
+    def test_orphan_away_teams_returns_error(self, validator: DataValidator) -> None:
+        """Should error when games have invalid away_team_id."""
+        from unittest.mock import MagicMock
+
+        session = MagicMock()
+        session.query.return_value.outerjoin.return_value.filter.return_value.count.side_effect = [
+            0,  # orphan home teams
+            3,  # orphan away teams
+            0,  # orphan player stats
+            0,  # orphan shots
+        ]
+
+        result = validator.validate_referential_integrity(session)
+
+        assert result.valid is False
+        assert any("away_team_id" in e for e in result.errors)
+
+    def test_orphan_player_stats_returns_error(self, validator: DataValidator) -> None:
+        """Should error when player stats have invalid player_id."""
+        from unittest.mock import MagicMock
+
+        session = MagicMock()
+        session.query.return_value.outerjoin.return_value.filter.return_value.count.side_effect = [
+            0,  # orphan home teams
+            0,  # orphan away teams
+            10,  # orphan player stats
+            0,  # orphan shots
+        ]
+
+        result = validator.validate_referential_integrity(session)
+
+        assert result.valid is False
+        assert any("player_game_stats" in e for e in result.errors)
+
+    def test_orphan_shots_returns_error(self, validator: DataValidator) -> None:
+        """Should error when shots have invalid player_id."""
+        from unittest.mock import MagicMock
+
+        session = MagicMock()
+        session.query.return_value.outerjoin.return_value.filter.return_value.count.side_effect = [
+            0,  # orphan home teams
+            0,  # orphan away teams
+            0,  # orphan player stats
+            25,  # orphan shots
+        ]
+
+        result = validator.validate_referential_integrity(session)
+
+        assert result.valid is False
+        assert any("shots" in e for e in result.errors)
+
+
+class TestValidateSeasonCompletenessExtended:
+    """Extended tests for validate_season_completeness method."""
+
+    @pytest.fixture
+    def validator(self) -> DataValidator:
+        """Create a validator instance."""
+        return DataValidator()
+
+    def test_low_game_count_returns_warning(self, validator: DataValidator) -> None:
+        """Should warn when season has few games."""
+        from unittest.mock import MagicMock
+
+        session = MagicMock()
+        # 500 games (low), all with pbp and boxscores
+        session.query.return_value.filter.return_value.scalar.side_effect = [500]
+        session.query.return_value.join.return_value.filter.return_value.scalar.side_effect = [
+            500,
+            500,
+        ]
+
+        result = validator.validate_season_completeness(session, "2023-24")
+
+        assert any("only" in w for w in result.warnings)
+
+    def test_missing_pbp_returns_warning(self, validator: DataValidator) -> None:
+        """Should warn when games are missing play-by-play."""
+        from unittest.mock import MagicMock
+
+        session = MagicMock()
+        # 1200 games, but only 1000 with pbp
+        session.query.return_value.filter.return_value.scalar.return_value = 1200
+        session.query.return_value.join.return_value.filter.return_value.scalar.side_effect = [
+            1000,  # games with pbp
+            1200,  # games with boxscores
+        ]
+
+        result = validator.validate_season_completeness(session, "2023-24")
+
+        assert any("missing play-by-play" in w for w in result.warnings)
+
+    def test_missing_boxscores_returns_warning(self, validator: DataValidator) -> None:
+        """Should warn when games are missing box scores."""
+        from unittest.mock import MagicMock
+
+        session = MagicMock()
+        # 1200 games, all with pbp, but only 1150 with boxscores
+        session.query.return_value.filter.return_value.scalar.return_value = 1200
+        session.query.return_value.join.return_value.filter.return_value.scalar.side_effect = [
+            1200,  # games with pbp
+            1150,  # games with boxscores
+        ]
+
+        result = validator.validate_season_completeness(session, "2023-24")
+
+        assert any("missing box scores" in w for w in result.warnings)
+
+
+class TestValidateGameCompletenessExtended:
+    """Extended tests for validate_game_completeness method."""
+
+    @pytest.fixture
+    def validator(self) -> DataValidator:
+        """Create a validator instance."""
+        return DataValidator()
+
+    def test_high_play_count_returns_warning(self, validator: DataValidator) -> None:
+        """Should warn when play count is unusually high."""
+        from unittest.mock import MagicMock
+
+        session = MagicMock()
+        # Game exists
+        mock_game = MagicMock()
+        session.query.return_value.filter.return_value.first.return_value = mock_game
+        # Very high play count (overtime games)
+        session.query.return_value.filter.return_value.scalar.side_effect = [
+            800,  # play count (very high)
+            2,  # game stats count
+            15,  # player stats count
+            100,  # shot count
+        ]
+
+        result = validator.validate_game_completeness(session, "0022300001")
+
+        assert any("high play count" in w for w in result.warnings)
+
+    def test_missing_box_scores_returns_error(self, validator: DataValidator) -> None:
+        """Should error when game is missing team box scores."""
+        from unittest.mock import MagicMock
+
+        session = MagicMock()
+        mock_game = MagicMock()
+        session.query.return_value.filter.return_value.first.return_value = mock_game
+        session.query.return_value.filter.return_value.scalar.side_effect = [
+            300,  # play count
+            1,  # game stats count (only 1 team)
+            15,  # player stats count
+            100,  # shot count
+        ]
+
+        result = validator.validate_game_completeness(session, "0022300001")
+
+        assert result.valid is False
+        assert any("missing team box scores" in e for e in result.errors)
+
+    def test_low_player_stats_returns_warning(self, validator: DataValidator) -> None:
+        """Should warn when player stats count is low."""
+        from unittest.mock import MagicMock
+
+        session = MagicMock()
+        mock_game = MagicMock()
+        session.query.return_value.filter.return_value.first.return_value = mock_game
+        session.query.return_value.filter.return_value.scalar.side_effect = [
+            300,  # play count
+            2,  # game stats count
+            5,  # player stats count (too low)
+            100,  # shot count
+        ]
+
+        result = validator.validate_game_completeness(session, "0022300001")
+
+        assert any("low player stats count" in w for w in result.warnings)
+
+    def test_no_shots_returns_warning(self, validator: DataValidator) -> None:
+        """Should warn when game has no shot data."""
+        from unittest.mock import MagicMock
+
+        session = MagicMock()
+        mock_game = MagicMock()
+        session.query.return_value.filter.return_value.first.return_value = mock_game
+        session.query.return_value.filter.return_value.scalar.side_effect = [
+            300,  # play count
+            2,  # game stats count
+            20,  # player stats count
+            0,  # shot count (none)
+        ]
+
+        result = validator.validate_game_completeness(session, "0022300001")
+
+        assert any("no shot data" in w for w in result.warnings)

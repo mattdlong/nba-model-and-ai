@@ -374,3 +374,127 @@ class TestDashboardCommands:
 
         assert result.exit_code == 0
         assert "Phase 8" in result.stdout
+
+
+class TestDataRepairCommand:
+    """Tests for data repair command."""
+
+    def test_data_repair_shows_game_ids(self) -> None:
+        """Data repair should show the game IDs being repaired."""
+        result = runner.invoke(app, ["data", "repair", "0022300001"])
+
+        # Should show the game ID before attempting repair
+        assert "0022300001" in result.stdout
+
+    def test_data_repair_multiple_games(self) -> None:
+        """Data repair should accept multiple game IDs."""
+        result = runner.invoke(
+            app, ["data", "repair", "0022300001", "0022300002", "0022300003"]
+        )
+
+        # Should show multiple game IDs
+        assert "0022300001" in result.stdout
+
+    def test_data_repair_help(self) -> None:
+        """Data repair help should show usage."""
+        result = runner.invoke(app, ["data", "repair", "--help"])
+
+        assert result.exit_code == 0
+        assert "GAME_IDS" in result.stdout
+
+
+class TestDisplayPipelineResult:
+    """Tests for _display_pipeline_result helper."""
+
+    def test_display_completed_result(self) -> None:
+        """Should display completed result without error."""
+        from nba_model.cli import _display_pipeline_result
+        from nba_model.data.pipelines import PipelineResult, PipelineStatus
+
+        result = PipelineResult(
+            status=PipelineStatus.COMPLETED,
+            games_processed=10,
+            plays_collected=500,
+            shots_collected=100,
+            stints_derived=50,
+            duration_seconds=30.5,
+        )
+
+        # Should not raise
+        _display_pipeline_result(result)
+
+    def test_display_failed_result(self) -> None:
+        """Should display failed result without error."""
+        from nba_model.cli import _display_pipeline_result
+        from nba_model.data.pipelines import PipelineResult, PipelineStatus
+
+        result = PipelineResult(
+            status=PipelineStatus.FAILED,
+            errors=["Error 1", "Error 2"],
+            duration_seconds=5.0,
+        )
+
+        # Should not raise
+        _display_pipeline_result(result)
+
+    def test_display_result_with_many_errors(self) -> None:
+        """Should truncate errors list when there are many."""
+        from nba_model.cli import _display_pipeline_result
+        from nba_model.data.pipelines import PipelineResult, PipelineStatus
+
+        result = PipelineResult(
+            status=PipelineStatus.FAILED,
+            errors=[f"Error {i}" for i in range(20)],
+            duration_seconds=5.0,
+        )
+
+        # Should not raise (truncates to first 10)
+        _display_pipeline_result(result)
+
+
+class TestGetDatabaseStats:
+    """Tests for _get_database_stats helper."""
+
+    def test_returns_stats_list(self) -> None:
+        """Should return list of (entity, count, date_range) tuples."""
+        from unittest.mock import MagicMock
+
+        from nba_model.cli import _get_database_stats
+
+        session = MagicMock()
+        # Mock all query returns
+        session.query.return_value.scalar.return_value = 0
+
+        stats = _get_database_stats(session)
+
+        # Should return a list of tuples
+        assert isinstance(stats, list)
+        assert len(stats) >= 4  # Games, Players, Plays, Shots, Stints
+
+    def test_returns_date_range_when_games_exist(self) -> None:
+        """Should return date range when games exist."""
+        from datetime import date
+        from unittest.mock import MagicMock
+
+        from nba_model.cli import _get_database_stats
+
+        session = MagicMock()
+        # First call for game count (> 0)
+        # Subsequent calls for min/max dates and other counts
+        session.query.return_value.scalar.side_effect = [
+            100,  # game count
+            date(2024, 1, 1),  # min date
+            date(2024, 6, 30),  # max date
+            50,  # players
+            500,  # plays
+            100,  # shots
+            25,  # stints
+        ]
+
+        stats = _get_database_stats(session)
+
+        # Games entry should have date range
+        games_stat = stats[0]
+        assert games_stat[0] == "Games"
+        assert games_stat[1] == 100
+        assert games_stat[2] is not None  # Date range
