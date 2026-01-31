@@ -1,0 +1,164 @@
+[project]
+name = "nba-model"
+version = "0.1.0"
+description = "NBA Quantitative Trading Strategy - Transformer + GNN fusion model for game prediction"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "NBA Model Team"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    # CLI Framework
+    "typer>=0.9.0",
+    "rich>=13.0",
+
+    # Data Layer
+    "nba_api>=1.4",
+    "sqlalchemy>=2.0",
+    "pandas>=2.0",
+    "numpy>=1.24",
+
+    # Machine Learning
+    "torch>=2.0",
+    "torch-geometric>=2.4",
+    "scikit-learn>=1.3",
+    "scipy>=1.11",
+
+    # Feature Engineering
+    "haversine>=2.8",
+
+    # Configuration
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "python-dotenv>=1.0",
+
+    # Utilities
+    "tqdm>=4.66",
+    "loguru>=0.7",
+    "jinja2>=3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "pytest-asyncio>=0.21",
+    "black>=23.0",
+    "ruff>=0.1",
+    "mypy>=1.5",
+    "pandas-stubs>=2.0",
+    "pre-commit>=3.5",
+]
+
+[project.scripts]
+nba-model = "nba_model.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/nba-model/nba-model"
+Documentation = "https://github.com/nba-model/nba-model#readme"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nba_model*"]
+
+[tool.black]
+line-length = 88
+target-version = ['py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+    \.eggs
+    | \.git
+    | \.mypy_cache
+    | \.venv
+    | build
+    | dist
+    | data
+)/
+'''
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM", "RUF"]
+ignore = ["E501"]
+exclude = [
+    ".eggs",
+    ".git",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".venv",
+    "build",
+    "dist",
+    "data",
+]
+
+[tool.ruff.isort]
+known-first-party = ["nba_model"]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+exclude = [
+    "data/",
+    "build/",
+    "dist/",
+]
+
+[[tool.mypy.overrides]]
+module = [
+    "nba_api.*",
+    "torch_geometric.*",
+    "haversine.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+]
+
+[tool.coverage.run]
+source = ["nba_model"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
+fail_under = 75
