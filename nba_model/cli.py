@@ -2980,17 +2980,77 @@ def monitor_versions(
 
 
 @predict_app.command("today")
-def predict_today() -> None:
+def predict_today(
+    model_version: Annotated[
+        str,
+        typer.Option(
+            "--model-version",
+            "-m",
+            help="Model version to use (default: latest)",
+        ),
+    ] = "latest",
+    skip_injuries: Annotated[
+        bool,
+        typer.Option(
+            "--skip-injuries/--with-injuries",
+            help="Skip injury adjustments",
+        ),
+    ] = False,
+) -> None:
     """Generate predictions for today's games.
 
     Produces win probabilities, margins, and totals for all games today.
+    Uses injury-adjusted probabilities by default.
     """
-    console.print(
-        Panel(
-            "[yellow]Predictions not yet implemented (Phase 7)[/yellow]",
-            title="Predict Today",
+    from datetime import date
+
+    from nba_model.data import init_db, session_scope
+    from nba_model.models import ModelRegistry
+    from nba_model.predict import InferencePipeline
+
+    settings = get_settings()
+
+    # Check if database exists
+    if not settings.db_path_obj.exists():
+        console.print(
+            "[red]Error: Database not found. Run 'data collect' first.[/red]"
         )
-    )
+        raise typer.Exit(1)
+
+    init_db()
+
+    with session_scope() as session:
+        try:
+            registry = ModelRegistry()
+            pipeline = InferencePipeline(
+                model_registry=registry,
+                db_session=session,
+                model_version=model_version,
+            )
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                progress.add_task("Generating predictions...", total=None)
+                predictions = pipeline.predict_today()
+
+            if not predictions:
+                console.print(
+                    Panel(
+                        f"[yellow]No games scheduled for {date.today()}[/yellow]",
+                        title="Predictions",
+                    )
+                )
+                return
+
+            # Display predictions
+            _display_predictions(predictions)
+
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1)
 
 
 @predict_app.command("game")
@@ -2999,18 +3059,67 @@ def predict_game(
         str,
         typer.Argument(help="NBA Game ID"),
     ],
+    model_version: Annotated[
+        str,
+        typer.Option(
+            "--model-version",
+            "-m",
+            help="Model version to use (default: latest)",
+        ),
+    ] = "latest",
+    skip_injuries: Annotated[
+        bool,
+        typer.Option(
+            "--skip-injuries/--with-injuries",
+            help="Skip injury adjustments",
+        ),
+    ] = False,
 ) -> None:
     """Generate prediction for a single game.
 
-    Produces detailed prediction with confidence intervals.
+    Produces detailed prediction with confidence and top factors.
     """
-    console.print(
-        Panel(
-            f"[bold]Game ID:[/bold] {game_id}\n"
-            "[yellow]Single game prediction not yet implemented (Phase 7)[/yellow]",
-            title="Predict Game",
+    from nba_model.data import init_db, session_scope
+    from nba_model.models import ModelRegistry
+    from nba_model.predict import InferencePipeline
+
+    settings = get_settings()
+
+    # Check if database exists
+    if not settings.db_path_obj.exists():
+        console.print(
+            "[red]Error: Database not found. Run 'data collect' first.[/red]"
         )
-    )
+        raise typer.Exit(1)
+
+    init_db()
+
+    with session_scope() as session:
+        try:
+            registry = ModelRegistry()
+            pipeline = InferencePipeline(
+                model_registry=registry,
+                db_session=session,
+                model_version=model_version,
+            )
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                progress.add_task("Generating prediction...", total=None)
+                prediction = pipeline.predict_game(
+                    game_id,
+                    apply_injury_adjustment=not skip_injuries,
+                )
+
+            # Display detailed prediction
+            _display_single_prediction(prediction)
+
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1)
 
 
 @predict_app.command("signals")
@@ -3019,21 +3128,256 @@ def predict_signals(
         float,
         typer.Option(
             "--min-edge",
-            help="Minimum edge percentage to show",
+            help="Minimum edge percentage to show (default 2%)",
         ),
     ] = 0.02,
+    model_version: Annotated[
+        str,
+        typer.Option(
+            "--model-version",
+            "-m",
+            help="Model version to use (default: latest)",
+        ),
+    ] = "latest",
+    bankroll: Annotated[
+        float,
+        typer.Option(
+            "--bankroll",
+            "-b",
+            help="Bankroll for Kelly sizing (default: 10000)",
+        ),
+    ] = 10000.0,
 ) -> None:
-    """Generate betting signals.
+    """Generate betting signals for today's games.
 
-    Identifies bets with positive expected value.
+    Identifies bets with positive expected value based on model vs market
+    probability comparison. Uses Kelly criterion for position sizing.
     """
-    console.print(
-        Panel(
-            f"[bold]Min Edge:[/bold] {min_edge:.1%}\n"
-            "[yellow]Signal generation not yet implemented (Phase 7)[/yellow]",
-            title="Predict Signals",
+    from datetime import date
+
+    from nba_model.backtest import DevigCalculator, KellyCalculator
+    from nba_model.data import init_db, session_scope
+    from nba_model.models import ModelRegistry
+    from nba_model.predict import InferencePipeline, SignalGenerator
+
+    settings = get_settings()
+
+    # Check if database exists
+    if not settings.db_path_obj.exists():
+        console.print(
+            "[red]Error: Database not found. Run 'data collect' first.[/red]"
         )
+        raise typer.Exit(1)
+
+    init_db()
+
+    with session_scope() as session:
+        try:
+            # Generate predictions
+            registry = ModelRegistry()
+            pipeline = InferencePipeline(
+                model_registry=registry,
+                db_session=session,
+                model_version=model_version,
+            )
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                progress.add_task("Generating predictions...", total=None)
+                predictions = pipeline.predict_today()
+
+            if not predictions:
+                console.print(
+                    Panel(
+                        f"[yellow]No games scheduled for {date.today()}[/yellow]",
+                        title="Betting Signals",
+                    )
+                )
+                return
+
+            # Note: In production, market odds would come from an API
+            console.print(
+                Panel(
+                    "[yellow]Note: Market odds integration not yet implemented.\n"
+                    "Signals would be generated when odds data is available.[/yellow]\n\n"
+                    f"[bold]Predictions available:[/bold] {len(predictions)} games\n"
+                    f"[bold]Min Edge:[/bold] {min_edge:.1%}\n"
+                    f"[bold]Bankroll:[/bold] ${bankroll:,.0f}",
+                    title="Betting Signals",
+                )
+            )
+
+            # Show predictions without signals
+            _display_predictions(predictions)
+
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1)
+
+
+@predict_app.command("date")
+def predict_date(
+    target_date: Annotated[
+        str,
+        typer.Argument(help="Date to predict (YYYY-MM-DD)"),
+    ],
+    model_version: Annotated[
+        str,
+        typer.Option(
+            "--model-version",
+            "-m",
+            help="Model version to use (default: latest)",
+        ),
+    ] = "latest",
+) -> None:
+    """Generate predictions for games on a specific date.
+
+    Produces win probabilities, margins, and totals for all games on the date.
+    """
+    from datetime import date, datetime
+
+    from nba_model.data import init_db, session_scope
+    from nba_model.models import ModelRegistry
+    from nba_model.predict import InferencePipeline
+
+    settings = get_settings()
+
+    # Parse date
+    try:
+        parsed_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+    except ValueError:
+        console.print(
+            "[red]Error: Invalid date format. Use YYYY-MM-DD.[/red]"
+        )
+        raise typer.Exit(1)
+
+    # Check if database exists
+    if not settings.db_path_obj.exists():
+        console.print(
+            "[red]Error: Database not found. Run 'data collect' first.[/red]"
+        )
+        raise typer.Exit(1)
+
+    init_db()
+
+    with session_scope() as session:
+        try:
+            registry = ModelRegistry()
+            pipeline = InferencePipeline(
+                model_registry=registry,
+                db_session=session,
+                model_version=model_version,
+            )
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                progress.add_task("Generating predictions...", total=None)
+                predictions = pipeline.predict_date(parsed_date)
+
+            if not predictions:
+                console.print(
+                    Panel(
+                        f"[yellow]No games found for {parsed_date}[/yellow]",
+                        title="Predictions",
+                    )
+                )
+                return
+
+            # Display predictions
+            _display_predictions(predictions)
+
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1)
+
+
+def _display_predictions(predictions) -> None:
+    """Display predictions in a table."""
+    table = Table(title="Game Predictions")
+    table.add_column("Game", style="cyan")
+    table.add_column("Home Win %", justify="right")
+    table.add_column("Margin", justify="right")
+    table.add_column("Total", justify="right")
+    table.add_column("Confidence", justify="center")
+
+    for pred in predictions:
+        # Format confidence with color
+        if pred.confidence >= 0.6:
+            conf_str = f"[green]{pred.confidence:.0%}[/green]"
+        elif pred.confidence >= 0.4:
+            conf_str = f"[yellow]{pred.confidence:.0%}[/yellow]"
+        else:
+            conf_str = f"[red]{pred.confidence:.0%}[/red]"
+
+        table.add_row(
+            pred.matchup,
+            f"{pred.home_win_prob_adjusted:.1%}",
+            f"{pred.predicted_margin_adjusted:+.1f}",
+            f"{pred.predicted_total_adjusted:.1f}",
+            conf_str,
+        )
+
+    console.print(table)
+
+    # Show injury uncertainty if present
+    high_uncertainty = [p for p in predictions if p.injury_uncertainty > 0.1]
+    if high_uncertainty:
+        console.print("\n[yellow]Games with injury uncertainty:[/yellow]")
+        for pred in high_uncertainty:
+            console.print(
+                f"  {pred.matchup}: {pred.injury_uncertainty:.0%} uncertainty"
+            )
+
+
+def _display_single_prediction(prediction) -> None:
+    """Display a single prediction with details."""
+    # Main prediction panel
+    main_info = (
+        f"[bold]Matchup:[/bold] {prediction.matchup}\n"
+        f"[bold]Date:[/bold] {prediction.game_date}\n"
+        f"\n"
+        f"[bold cyan]Predictions (Injury-Adjusted):[/bold cyan]\n"
+        f"  Home Win: {prediction.home_win_prob_adjusted:.1%}\n"
+        f"  Margin: {prediction.predicted_margin_adjusted:+.1f} pts\n"
+        f"  Total: {prediction.predicted_total_adjusted:.1f} pts\n"
+        f"\n"
+        f"[bold]Raw Model Outputs:[/bold]\n"
+        f"  Home Win: {prediction.home_win_prob:.1%}\n"
+        f"  Margin: {prediction.predicted_margin:+.1f} pts\n"
+        f"  Total: {prediction.predicted_total:.1f} pts\n"
+        f"\n"
+        f"[bold]Confidence:[/bold] {prediction.confidence:.0%}\n"
+        f"[bold]Injury Uncertainty:[/bold] {prediction.injury_uncertainty:.0%}\n"
+        f"[bold]Model Version:[/bold] {prediction.model_version}\n"
+        f"[bold]Inference Time:[/bold] {prediction.inference_time_ms:.1f}ms"
     )
+
+    console.print(Panel(main_info, title="Game Prediction"))
+
+    # Top factors
+    if prediction.top_factors:
+        factors_table = Table(title="Top Contributing Factors")
+        factors_table.add_column("Feature", style="cyan")
+        factors_table.add_column("Value", justify="right")
+
+        for name, value in prediction.top_factors:
+            factors_table.add_row(name, f"{value:.3f}")
+
+        console.print(factors_table)
+
+    # Lineups
+    if prediction.home_lineup or prediction.away_lineup:
+        console.print("\n[bold]Expected Lineups:[/bold]")
+        if prediction.home_lineup:
+            console.print(f"  Home: {', '.join(prediction.home_lineup)}")
+        if prediction.away_lineup:
+            console.print(f"  Away: {', '.join(prediction.away_lineup)}")
 
 
 # =============================================================================
