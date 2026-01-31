@@ -7,15 +7,32 @@ This module contains individual collectors for different data types:
 - ShotsCollector: Shot chart location data
 - BoxScoreCollector: Advanced box score statistics
 
-Each collector implements checkpointing for resumable collection
-and handles API rate limiting and error recovery.
+Each collector handles API rate limiting and error recovery
+through the shared NBAApiClient.
 
 Example:
     >>> from nba_model.data.collectors import GamesCollector
-    >>> collector = GamesCollector(db_session)
-    >>> games = collector.collect(season="2023-24")
+    >>> from nba_model.data.api import NBAApiClient
+    >>> client = NBAApiClient()
+    >>> collector = GamesCollector(client)
+    >>> games = collector.collect_season("2023-24")
 """
 from __future__ import annotations
 
-# Public API - will be populated in Phase 2
-__all__: list[str] = []
+from nba_model.data.collectors.base import BaseCollector
+from nba_model.data.collectors.boxscores import BoxScoreCollector
+from nba_model.data.collectors.games import GamesCollector
+from nba_model.data.collectors.players import PlayersCollector, TEAM_DATA
+from nba_model.data.collectors.playbyplay import EVENT_TYPES, PlayByPlayCollector
+from nba_model.data.collectors.shots import ShotsCollector
+
+__all__ = [
+    "BaseCollector",
+    "BoxScoreCollector",
+    "EVENT_TYPES",
+    "GamesCollector",
+    "PlayByPlayCollector",
+    "PlayersCollector",
+    "ShotsCollector",
+    "TEAM_DATA",
+]

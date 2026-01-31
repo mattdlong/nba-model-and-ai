@@ -1,0 +1,252 @@
+"""Play-by-play collector for NBA game events.
+
+This module provides the PlayByPlayCollector class for fetching
+play-by-play data from the NBA API.
+
+Example:
+    >>> from nba_model.data.collectors import PlayByPlayCollector
+    >>> collector = PlayByPlayCollector(api_client, session)
+    >>> plays = collector.collect_game("0022300001")
+"""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Literal
+
+import pandas as pd
+
+from nba_model.data.collectors.base import BaseCollector
+from nba_model.data.models import Play
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+    from nba_model.data.api import NBAApiClient
+
+
+# =============================================================================
+# Event Type Constants
+# =============================================================================
+
+EVENT_TYPES: dict[int, str] = {
+    1: "FIELD_GOAL_MADE",
+    2: "FIELD_GOAL_MISSED",
+    3: "FREE_THROW",
+    4: "REBOUND",
+    5: "TURNOVER",
+    6: "FOUL",
+    7: "VIOLATION",
+    8: "SUBSTITUTION",
+    9: "TIMEOUT",
+    10: "JUMP_BALL",
+    11: "EJECTION",
+    12: "PERIOD_START",
+    13: "PERIOD_END",
+    18: "INSTANT_REPLAY",
+    20: "STOPPAGE",
+}
+
+
+class PlayByPlayCollector(BaseCollector):
+    """Collects play-by-play event data for games.
+
+    Each game has ~300-500 events with event types, descriptions,
+    timestamps, and player references.
+    """
+
+    def __init__(
+        self,
+        api_client: NBAApiClient,
+        db_session: Session | None = None,
+    ) -> None:
+        """Initialize play-by-play collector.
+
+        Args:
+            api_client: NBA API client instance.
+            db_session: Optional SQLAlchemy session.
+        """
+        super().__init__(api_client, db_session)
+
+    def collect_game(self, game_id: str) -> list[Play]:
+        """Collect play-by-play for a single game.
+
+        Args:
+            game_id: NBA game ID.
+
+        Returns:
+            List of Play model instances.
+        """
+        self.logger.debug(f"Collecting play-by-play for game {game_id}")
+
+        try:
+            df = self.api.get_play_by_play(game_id=game_id)
+
+            if df.empty:
+                self.logger.warning(f"No play-by-play data for game {game_id}")
+                return []
+
+            plays = []
+            for _, row in df.iterrows():
+                play = self._transform_play(row, game_id)
+                if play:
+                    plays.append(play)
+
+            self.logger.debug(f"Collected {len(plays)} plays for game {game_id}")
+            return plays
+
+        except Exception as e:
+            self.logger.error(f"Error collecting play-by-play for {game_id}: {e}")
+            raise
+
+    def collect_games(
+        self,
+        game_ids: list[str],
+        on_error: Literal["raise", "skip", "log"] = "log",
+    ) -> dict[str, list[Play]]:
+        """Collect play-by-play for multiple games.
+
+        Args:
+            game_ids: List of game IDs.
+            on_error: Error handling strategy:
+                - "raise": Stop on first error
+                - "skip": Skip failed games silently
+                - "log": Log errors and continue
+
+        Returns:
+            Dict mapping game_id to list of Play instances.
+        """
+        self.logger.info(f"Collecting play-by-play for {len(game_ids)} games")
+
+        results: dict[str, list[Play]] = {}
+
+        for i, game_id in enumerate(game_ids, 1):
+            self._log_progress(i, len(game_ids), game_id)
+
+            try:
+                plays = self.collect_game(game_id)
+                results[game_id] = plays
+            except Exception as e:
+                self._handle_error(e, game_id, on_error)
+                if on_error == "raise":
+                    raise
+
+        self.logger.info(
+            f"Collected play-by-play for {len(results)}/{len(game_ids)} games"
+        )
+        return results
+
+    def _transform_play(self, row: pd.Series, game_id: str) -> Play | None:
+        """Transform API response row to Play model.
+
+        Args:
+            row: DataFrame row from PlayByPlayV2.
+            game_id: NBA game ID.
+
+        Returns:
+            Play model instance or None.
+        """
+        try:
+            # Extract player IDs
+            player1_id, player2_id, player3_id = self._extract_player_ids(row)
+
+            # Parse time
+            pc_time = self._parse_time(row.get("PCTIMESTRING", ""))
+
+            # Extract event number
+            event_num = int(row.get("EVENTNUM", 0))
+
+            # Parse score
+            score_str = row.get("SCORE", "")
+            score_home, score_away = self._parse_score(score_str)
+
+            return Play(
+                game_id=game_id,
+                event_num=event_num,
+                period=int(row.get("PERIOD", 1)),
+                pc_time=pc_time,
+                wc_time=str(row.get("WCTIMESTRING", "")) or None,
+                event_type=int(row.get("EVENTMSGTYPE", 0)),
+                event_action=self._safe_int(row.get("EVENTMSGACTIONTYPE")),
+                home_description=str(row.get("HOMEDESCRIPTION", "")) or None,
+                away_description=str(row.get("VISITORDESCRIPTION", "")) or None,
+                neutral_description=str(row.get("NEUTRALDESCRIPTION", "")) or None,
+                score_home=score_home,
+                score_away=score_away,
+                player1_id=player1_id,
+                player2_id=player2_id,
+                player3_id=player3_id,
+                team_id=self._safe_int(row.get("PLAYER1_TEAM_ID")),
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error transforming play: {e}")
+            return None
+
+    def _parse_time(self, pctimestring: str | None) -> str | None:
+        """Parse time string to consistent format.
+
+        Args:
+            pctimestring: Time string from API (e.g., "11:45").
+
+        Returns:
+            Normalized time string or None.
+        """
+        if not pctimestring or pd.isna(pctimestring):
+            return None
+        return str(pctimestring).strip()
+
+    def _parse_score(self, score_str: str | None) -> tuple[int | None, int | None]:
+        """Parse score string to home and away scores.
+
+        Args:
+            score_str: Score string (e.g., "100 - 95").
+
+        Returns:
+            Tuple of (score_home, score_away) or (None, None).
+        """
+        if not score_str or pd.isna(score_str):
+            return None, None
+
+        try:
+            # Format: "AWAY - HOME" (visitor score first)
+            parts = str(score_str).split(" - ")
+            if len(parts) == 2:
+                return int(parts[1]), int(parts[0])
+        except (ValueError, IndexError):
+            pass
+
+        return None, None
+
+    def _extract_player_ids(
+        self, row: pd.Series
+    ) -> tuple[int | None, int | None, int | None]:
+        """Extract player IDs from event data.
+
+        Args:
+            row: DataFrame row.
+
+        Returns:
+            Tuple of (player1_id, player2_id, player3_id).
+        """
+        player1_id = self._safe_int(row.get("PLAYER1_ID"))
+        player2_id = self._safe_int(row.get("PLAYER2_ID"))
+        player3_id = self._safe_int(row.get("PLAYER3_ID"))
+
+        return player1_id, player2_id, player3_id
+
+    def _safe_int(self, value: object) -> int | None:
+        """Safely convert value to int.
+
+        Args:
+            value: Value to convert.
+
+        Returns:
+            Integer or None if invalid/missing.
+        """
+        if value is None or pd.isna(value):
+            return None
+        try:
+            int_val = int(value)
+            # NBA API sometimes uses 0 for missing player IDs
+            return int_val if int_val != 0 else None
+        except (ValueError, TypeError):
+            return None

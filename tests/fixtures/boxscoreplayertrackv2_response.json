@@ -1,0 +1,28 @@
+{
+  "resultSets": [
+    {
+      "name": "PlayerStats",
+      "headers": [
+        "GAME_ID", "TEAM_ID", "TEAM_ABBREVIATION", "TEAM_CITY", "PLAYER_ID",
+        "PLAYER_NAME", "START_POSITION", "COMMENT", "MIN", "SPD", "DIST",
+        "ORBC", "DRBC", "RBC", "TCHS", "SAST", "FTAST", "PASS", "AST", "CFGM",
+        "CFGA", "CFG_PCT", "UFGM", "UFGA", "UFG_PCT", "FG_PCT", "DFGM", "DFGA",
+        "DFG_PCT"
+      ],
+      "rowSet": [
+        ["0022300001", 1610612738, "BOS", "Boston", 1628369, "Jayson Tatum",
+         "F", "", "38:15", 4.52, 2.85, 1, 7, 8, 85, 12, 3, 52, 6, 8, 14,
+         0.571, 4, 8, 0.500, 0.545, 5, 12, 0.417],
+        ["0022300001", 1610612738, "BOS", "Boston", 1627759, "Jaylen Brown",
+         "G", "", "36:42", 4.68, 2.72, 2, 5, 7, 72, 10, 2, 48, 5, 6, 11,
+         0.545, 4, 7, 0.571, 0.556, 4, 10, 0.400],
+        ["0022300001", 1610612747, "LAL", "Los Angeles", 2544, "LeBron James",
+         "F", "", "40:00", 4.35, 3.02, 1, 9, 10, 92, 15, 5, 68, 8, 9, 15,
+         0.600, 5, 10, 0.500, 0.560, 6, 14, 0.429],
+        ["0022300001", 1610612747, "LAL", "Los Angeles", 203076, "Anthony Davis",
+         "F", "", "38:30", 4.12, 2.55, 4, 10, 14, 58, 8, 2, 35, 3, 7, 12,
+         0.583, 4, 8, 0.500, 0.550, 5, 11, 0.455]
+      ]
+    }
+  ]
+}

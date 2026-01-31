@@ -1,0 +1,23 @@
+{
+  "resultSets": [
+    {
+      "name": "CommonTeamRoster",
+      "headers": [
+        "TeamID", "SEASON", "LeagueID", "PLAYER", "NICKNAME", "PLAYER_SLUG",
+        "NUM", "POSITION", "HEIGHT", "WEIGHT", "BIRTH_DATE", "AGE",
+        "EXP", "SCHOOL", "PLAYER_ID", "HOW_ACQUIRED"
+      ],
+      "rowSet": [
+        [1610612738, "2023-24", "00", "Jayson Tatum", "Tatum", "jayson-tatum",
+         "0", "F", "6-8", "210", "MAR 03, 1998", 25.0, 6, "Duke",
+         1628369, "Draft"],
+        [1610612738, "2023-24", "00", "Jaylen Brown", "Brown", "jaylen-brown",
+         "7", "G-F", "6-6", "223", "OCT 24, 1996", 27.0, 7, "California",
+         1627759, "Draft"],
+        [1610612738, "2023-24", "00", "Derrick White", "White", "derrick-white",
+         "9", "G", "6-4", "190", "JUL 02, 1994", 29.0, 6, "Colorado",
+         1628401, "Trade"]
+      ]
+    }
+  ]
+}
