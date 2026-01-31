@@ -61,3 +61,47 @@ Coverage status: **NOT VERIFIED** due to test crash.
 **NOT READY**
 
 The core output modules exist and imports succeed, but Phase 8’s dashboard content requirements and testing requirements are incomplete. The asset-copy path mismatch and CLI deploy cleanliness requirement are also blocking issues. Resolve the issues above, rerun tests/coverage, and update CLAUDE.md accuracy before readiness.
+
+---
+
+## Loop 1 Results (Post-Fix Review)
+
+### Prior Issues Status
+
+1. **Static assets path mismatch** → **RESOLVED**
+   - `_copy_static_assets` now prefers `docs/assets` with fallback to `templates/assets`.
+   - File: `nba_model/output/dashboard.py`
+
+2. **Dashboard templates missing required content** → **PARTIALLY RESOLVED**
+   - Content sections were added across templates, but `templates/history.html` has an early `{% endblock %}` that causes the Bet History table section to be rendered outside the `{% block content %}` and therefore omitted when extending `base.html`.
+   - File: `templates/history.html`
+
+3. **Missing CLI command tests / headless checks** → **RESOLVED**
+   - Added CLI command tests for `dashboard build` and basic headless verification checks.
+   - File: `tests/integration/test_output_pipeline.py`
+
+4. **`dashboard deploy` clean directory check** → **RESOLVED**
+   - Now enforces a clean working tree outside `docs/` before deploying.
+   - File: `nba_model/cli.py`
+
+5. **`templates/CLAUDE.md` inaccuracies** → **UNRESOLVED**
+   - Still claims `index.html` is passed `performance`, `health`, and `model_info`, but `DashboardBuilder._render_index_page()` does not supply these values. The template renders defaults instead of real metrics.
+   - File: `templates/CLAUDE.md`, `nba_model/output/dashboard.py`
+
+### New Issues Found
+
+1. **Bet history section not rendered on history page.**
+   - `templates/history.html` closes `{% block content %}` before the Bet History table section, so the table never appears in rendered output.
+   - This fails Phase 8’s “bet history table” requirement even though the markup exists.
+   - File: `templates/history.html`
+
+2. **Index template expects performance/health/model_info but builder never provides them.**
+   - `templates/index.html` references `performance`, `health`, and `model_info`, but `_render_index_page()` only passes summary/top_signals/prediction_date.
+   - Result: summary stats, model version, and health badge show defaults instead of real data.
+   - File: `templates/index.html`, `nba_model/output/dashboard.py`
+
+## Updated Overall Assessment
+
+**NOT READY**
+
+The Loop 1 fixes addressed assets, CLI deploy cleanliness, and CLI/headless testing. However, the history page still fails to render the required bet history table due to a block placement bug, and the index page does not receive the metrics/health/model metadata it displays. Templates CLAUDE docs remain inaccurate for index variables. These gaps block Phase 8 completeness and documentation accuracy.
