@@ -16,6 +16,8 @@ from typing import Annotated, Optional
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.table import Table
 
 from nba_model import __version__
 from nba_model.config import get_settings
@@ -115,7 +117,7 @@ def main(
     # Setup logging based on verbosity
     settings = get_settings()
     log_level = "DEBUG" if verbose else settings.log_level
-    setup_logging(level=log_level, log_dir=settings.log_dir)
+    setup_logging(level=log_level, log_dir=settings.log_dir_obj)
 
 
 # =============================================================================
@@ -141,21 +143,72 @@ def data_collect(
             help="Collect all available data (5 seasons)",
         ),
     ] = False,
+    resume: Annotated[
+        bool,
+        typer.Option(
+            "--resume/--no-resume",
+            help="Resume from checkpoint",
+        ),
+    ] = True,
 ) -> None:
     """Collect data from NBA API.
 
     Fetches games, players, play-by-play, and shot data for specified seasons.
     """
+    from nba_model.data import NBAApiClient, init_db, session_scope
+    from nba_model.data.checkpoint import CheckpointManager
+    from nba_model.data.pipelines import CollectionPipeline
+
+    settings = get_settings()
+    settings.ensure_directories()
+
+    # Determine seasons
+    if full:
+        seasons_to_collect = ["2019-20", "2020-21", "2021-22", "2022-23", "2023-24"]
+    elif seasons:
+        seasons_to_collect = seasons
+    else:
+        console.print("[red]Error: Specify --seasons or --full[/red]")
+        raise typer.Exit(1)
+
     console.print(
         Panel(
-            "[yellow]Data collection not yet implemented (Phase 2)[/yellow]",
-            title="Data Collect",
+            f"[bold]Seasons:[/bold] {', '.join(seasons_to_collect)}\n"
+            f"[bold]Resume:[/bold] {resume}",
+            title="Data Collection",
         )
     )
-    if seasons:
-        console.print(f"Seasons requested: {', '.join(seasons)}")
-    if full:
-        console.print("Full collection mode enabled")
+
+    # Initialize database
+    init_db()
+
+    # Initialize components
+    with session_scope() as session:
+        api_client = NBAApiClient(
+            delay=settings.api_delay,
+            max_retries=settings.api_max_retries,
+        )
+        checkpoint_mgr = CheckpointManager()
+        pipeline = CollectionPipeline(
+            session=session,
+            api_client=api_client,
+            checkpoint_manager=checkpoint_mgr,
+        )
+
+        # Run collection
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            progress.add_task("Collecting data...", total=None)
+            result = pipeline.full_historical_load(
+                seasons=seasons_to_collect,
+                resume=resume,
+            )
+
+        # Display results
+        _display_pipeline_result(result)
 
 
 @data_app.command("update")
@@ -164,12 +217,37 @@ def data_update() -> None:
 
     Fetches games since last update and populates all related tables.
     """
-    console.print(
-        Panel(
-            "[yellow]Incremental update not yet implemented (Phase 2)[/yellow]",
-            title="Data Update",
+    from nba_model.data import NBAApiClient, init_db, session_scope
+    from nba_model.data.checkpoint import CheckpointManager
+    from nba_model.data.pipelines import CollectionPipeline
+
+    settings = get_settings()
+    settings.ensure_directories()
+
+    # Initialize database
+    init_db()
+
+    with session_scope() as session:
+        api_client = NBAApiClient(
+            delay=settings.api_delay,
+            max_retries=settings.api_max_retries,
         )
-    )
+        checkpoint_mgr = CheckpointManager()
+        pipeline = CollectionPipeline(
+            session=session,
+            api_client=api_client,
+            checkpoint_manager=checkpoint_mgr,
+        )
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            progress.add_task("Updating data...", total=None)
+            result = pipeline.incremental_update()
+
+        _display_pipeline_result(result)
 
 
 @data_app.command("status")
@@ -178,14 +256,138 @@ def data_status() -> None:
 
     Displays counts of games, players, and data recency information.
     """
+    from sqlalchemy import func
+
+    from nba_model.data import Game, Play, Player, Shot, Stint, init_db, session_scope
+    from nba_model.data.checkpoint import CheckpointManager
+
     settings = get_settings()
-    console.print(
-        Panel(
-            f"[bold]Database:[/bold] {settings.db_path}\n"
-            "[yellow]Status check not yet implemented (Phase 2)[/yellow]",
-            title="Data Status",
+
+    # Check if database exists
+    if not settings.db_path_obj.exists():
+        console.print(
+            Panel(
+                f"[bold]Database:[/bold] {settings.db_path}\n"
+                "[yellow]Database not found. Run 'data collect' first.[/yellow]",
+                title="Data Status",
+            )
         )
-    )
+        return
+
+    init_db()
+
+    with session_scope() as session:
+        stats = _get_database_stats(session)
+
+        table = Table(title="Database Status")
+        table.add_column("Entity", style="cyan")
+        table.add_column("Count", justify="right")
+        table.add_column("Date Range", style="green")
+
+        for entity, count, date_range in stats:
+            table.add_row(entity, str(count), date_range or "N/A")
+
+        console.print(table)
+
+        # Show checkpoint status
+        checkpoint_mgr = CheckpointManager()
+        checkpoints = checkpoint_mgr.list_all()
+        if checkpoints:
+            console.print("\n[bold]Checkpoints:[/bold]")
+            for cp in checkpoints:
+                status_color = "green" if cp.status == "completed" else "yellow"
+                console.print(
+                    f"  {cp.pipeline_name}: [{status_color}]{cp.status}[/{status_color}] "
+                    f"({cp.total_processed} games)"
+                )
+
+
+@data_app.command("repair")
+def data_repair(
+    game_ids: Annotated[
+        list[str],
+        typer.Argument(help="Game IDs to re-fetch"),
+    ],
+) -> None:
+    """Re-fetch specific game data."""
+    from nba_model.data import NBAApiClient, init_db, session_scope
+    from nba_model.data.checkpoint import CheckpointManager
+    from nba_model.data.pipelines import CollectionPipeline
+
+    settings = get_settings()
+    settings.ensure_directories()
+    init_db()
+
+    console.print(f"[bold]Repairing games:[/bold] {', '.join(game_ids)}")
+
+    with session_scope() as session:
+        api_client = NBAApiClient(
+            delay=settings.api_delay,
+            max_retries=settings.api_max_retries,
+        )
+        checkpoint_mgr = CheckpointManager()
+        pipeline = CollectionPipeline(
+            session=session,
+            api_client=api_client,
+            checkpoint_manager=checkpoint_mgr,
+        )
+
+        result = pipeline.repair_games(game_ids)
+        _display_pipeline_result(result)
+
+
+def _get_database_stats(session) -> list[tuple[str, int, str | None]]:
+    """Get row counts and date ranges for each entity."""
+    from sqlalchemy import func
+
+    from nba_model.data import Game, Play, Player, Shot, Stint
+
+    stats = []
+
+    # Games
+    game_count = session.query(func.count(Game.game_id)).scalar() or 0
+    if game_count > 0:
+        min_date = session.query(func.min(Game.game_date)).scalar()
+        max_date = session.query(func.max(Game.game_date)).scalar()
+        date_range = f"{min_date} to {max_date}"
+    else:
+        date_range = None
+    stats.append(("Games", game_count, date_range))
+
+    # Other entities
+    stats.append(("Players", session.query(func.count(Player.player_id)).scalar() or 0, None))
+    stats.append(("Plays", session.query(func.count(Play.id)).scalar() or 0, None))
+    stats.append(("Shots", session.query(func.count(Shot.id)).scalar() or 0, None))
+    stats.append(("Stints", session.query(func.count(Stint.id)).scalar() or 0, None))
+
+    return stats
+
+
+def _display_pipeline_result(result) -> None:
+    """Display pipeline result to console."""
+    from nba_model.data.pipelines import PipelineStatus
+
+    status_color = {
+        PipelineStatus.COMPLETED: "green",
+        PipelineStatus.FAILED: "red",
+        PipelineStatus.RUNNING: "yellow",
+        PipelineStatus.PAUSED: "yellow",
+        PipelineStatus.PENDING: "white",
+    }.get(result.status, "white")
+
+    console.print(f"\n[{status_color}]Status: {result.status.value}[/{status_color}]")
+    console.print(f"Games processed: {result.games_processed}")
+    console.print(f"Plays collected: {result.plays_collected}")
+    console.print(f"Shots collected: {result.shots_collected}")
+    console.print(f"Stints derived: {result.stints_derived}")
+    console.print(f"Duration: {result.duration_seconds:.1f}s")
+
+    if result.errors:
+        console.print(f"\n[red]Errors ({len(result.errors)}):[/red]")
+        for error in result.errors[:10]:
+            console.print(f"  - {error}")
+        if len(result.errors) > 10:
+            console.print(f"  ... and {len(result.errors) - 10} more")
 
 
 # =============================================================================

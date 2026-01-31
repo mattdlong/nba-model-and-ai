@@ -2,7 +2,7 @@
 
 This module provides data collection, storage, and retrieval functionality
 including database engine/session management, SQLAlchemy ORM models,
-NBA API client wrapper, and data collectors.
+NBA API client wrapper, data collectors, and ETL pipelines.
 
 Submodules:
     db: Database engine and session management
@@ -10,6 +10,10 @@ Submodules:
     models: SQLAlchemy ORM model definitions
     api: NBA API client with rate limiting and retry logic
     collectors: Individual data collectors
+    checkpoint: Pipeline checkpoint management
+    pipelines: ETL pipeline orchestration
+    stints: Stint derivation logic
+    validation: Data validation utilities
 
 Example:
     >>> from nba_model.data import init_db, session_scope
@@ -28,6 +32,7 @@ from nba_model.data.api import (
     NBAApiRateLimitError,
     NBAApiTimeoutError,
 )
+from nba_model.data.checkpoint import Checkpoint, CheckpointManager
 from nba_model.data.collectors import (
     BaseCollector,
     BoxScoreCollector,
@@ -62,7 +67,15 @@ from nba_model.data.models import (
     Stint,
     Team,
 )
+from nba_model.data.pipelines import (
+    BatchResult,
+    CollectionPipeline,
+    PipelineResult,
+    PipelineStatus,
+)
 from nba_model.data.schema import Base, TimestampMixin
+from nba_model.data.stints import LineupChange, StintDeriver
+from nba_model.data.validation import DataValidator, ValidationResult
 
 __all__ = [
     # API client and exceptions
@@ -80,6 +93,20 @@ __all__ = [
     "PlayersCollector",
     "ShotsCollector",
     "TEAM_DATA",
+    # Checkpoint management
+    "Checkpoint",
+    "CheckpointManager",
+    # Pipelines
+    "BatchResult",
+    "CollectionPipeline",
+    "PipelineResult",
+    "PipelineStatus",
+    # Stint derivation
+    "LineupChange",
+    "StintDeriver",
+    # Validation
+    "DataValidator",
+    "ValidationResult",
     # Database utilities
     "get_engine",
     "get_session",
