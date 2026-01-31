@@ -8,14 +8,14 @@ Contains detailed phase-by-phase implementation plans, checklists, and technical
 
 | File | Phase | Content |
 |------|-------|---------|
-| `phase1-foundation.md` | 1 | Project setup, CLI, config |
-| `phase2-data.md` | 2 | Data collection spec |
-| `phase3-features.md` | 3 | Feature engineering spec |
-| `phase4-models.md` | 4 | ML architecture spec |
-| `phase5-backtest.md` | 5 | Backtesting spec |
-| `phase6-monitor.md` | 6 | Monitoring spec |
-| `phase7-predict.md` | 7 | Inference pipeline spec |
-| `phase8-output.md` | 8 | Dashboard spec |
+| `phase1.md` | 1 | Project setup, CLI, config |
+| `phase2.md` | 2 | Data collection spec |
+| `phase3.md` | 3 | Feature engineering spec |
+| `phase4.md` | 4 | ML architecture spec |
+| `phase5.md` | 5 | Backtesting spec |
+| `phase6.md` | 6 | Monitoring spec |
+| `phase7.md` | 7 | Inference pipeline spec |
+| `phase8.md` | 8 | Dashboard spec |
 
 ## Usage
 
