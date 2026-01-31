@@ -26,7 +26,7 @@ dependencies = [
     "nba_api>=1.4",
     "sqlalchemy>=2.0",
     "pandas>=2.0",
-    "numpy>=1.24",
+    "numpy>=1.24,<2",  # PyTorch 2.2.2 requires numpy<2
 
     # Machine Learning
     "torch>=2.0",

@@ -30,24 +30,33 @@ class TestSettings:
         assert isinstance(settings.model_dir_obj, Path)
         assert isinstance(settings.log_dir_obj, Path)
 
-    def test_validation_rejects_empty_path(self) -> None:
+    def test_validation_rejects_empty_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Empty paths should be rejected."""
+        # pydantic_settings uses aliases as env var names
+        monkeypatch.setenv("NBA_DB_PATH", "   ")
         with pytest.raises(ValueError, match="cannot be empty"):
-            Settings(db_path="   ")
+            Settings()
 
-    def test_validation_rejects_invalid_kelly_fraction(self) -> None:
+    def test_validation_rejects_invalid_kelly_fraction(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Kelly fraction must be between 0 and 1."""
+        monkeypatch.setenv("KELLY_FRACTION", "1.5")
         with pytest.raises(ValueError):
-            Settings(kelly_fraction=1.5)
+            Settings()
 
-    def test_ensure_directories_creates_dirs(self, tmp_path: Path) -> None:
+    def test_ensure_directories_creates_dirs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """ensure_directories should create required directories."""
-        settings = Settings(
-            db_path=str(tmp_path / "data" / "test.db"),
-            model_dir=str(tmp_path / "models"),
-            log_dir=str(tmp_path / "logs"),
-        )
+        # Set env vars for pydantic_settings
+        monkeypatch.setenv("NBA_DB_PATH", str(tmp_path / "data" / "test.db"))
+        monkeypatch.setenv("MODEL_DIR", str(tmp_path / "models"))
+        monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
 
+        settings = Settings()
         settings.ensure_directories()
 
         assert (tmp_path / "data").exists()
