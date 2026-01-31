@@ -458,15 +458,30 @@ class DashboardBuilder:
     def _copy_static_assets(self) -> int:
         """Copy static assets to output directory.
 
+        Assets are located in docs/assets (the default output location).
+        When building to a custom output directory, we copy from docs/assets.
+
         Returns:
             Number of assets copied.
         """
         assets_copied = 0
-        source_dir = self.template_dir / "assets" if self.template_dir.exists() else None
         dest_dir = self.output_dir / "assets"
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        if source_dir and source_dir.exists():
+        # Assets live in docs/assets (the canonical location)
+        # Check multiple potential source locations in order of preference
+        potential_sources = [
+            Path("docs") / "assets",  # Default canonical location
+            self.template_dir / "assets",  # Template-relative (backwards compat)
+        ]
+
+        source_dir = None
+        for candidate in potential_sources:
+            if candidate.exists() and candidate.is_dir():
+                source_dir = candidate
+                break
+
+        if source_dir:
             for asset_file in source_dir.iterdir():
                 if asset_file.is_file():
                     shutil.copy2(asset_file, dest_dir / asset_file.name)

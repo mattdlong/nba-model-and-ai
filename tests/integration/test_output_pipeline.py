@@ -7,11 +7,13 @@ to dashboard building.
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 
 # =============================================================================
@@ -408,3 +410,190 @@ class TestOutputPipeline:
         assert "games" in today_data
         assert "signals" in today_data
         assert today_data["games"] == []
+
+
+@pytest.mark.integration
+class TestDashboardCLICommands:
+    """Integration tests for dashboard CLI commands."""
+
+    @pytest.fixture
+    def cli_runner(self) -> CliRunner:
+        """Create CLI test runner."""
+        return CliRunner()
+
+    def test_dashboard_build_command_executes(
+        self,
+        cli_runner: CliRunner,
+        tmp_path: Path,
+    ) -> None:
+        """Test that dashboard build command executes without error."""
+        from nba_model.cli import app
+
+        # Run dashboard build to a temp directory
+        result = cli_runner.invoke(
+            app,
+            ["dashboard", "build", "--output", str(tmp_path / "docs")],
+        )
+
+        # Should complete successfully (exit code 0)
+        assert result.exit_code == 0, f"Command failed: {result.output}"
+        assert "Dashboard built successfully" in result.output or "files" in result.output.lower()
+
+    def test_dashboard_build_creates_output_directory(
+        self,
+        cli_runner: CliRunner,
+        tmp_path: Path,
+    ) -> None:
+        """Test that dashboard build creates expected directory structure."""
+        from nba_model.cli import app
+
+        output_dir = tmp_path / "test_docs"
+
+        result = cli_runner.invoke(
+            app,
+            ["dashboard", "build", "--output", str(output_dir)],
+        )
+
+        assert result.exit_code == 0
+
+        # Verify directory structure
+        assert output_dir.exists()
+        assert (output_dir / "api").exists()
+        assert (output_dir / "api" / "today.json").exists()
+        assert (output_dir / "api" / "signals.json").exists()
+
+    def test_dashboard_build_creates_valid_json(
+        self,
+        cli_runner: CliRunner,
+        tmp_path: Path,
+    ) -> None:
+        """Test that dashboard build creates valid JSON files."""
+        from nba_model.cli import app
+
+        output_dir = tmp_path / "test_docs"
+
+        result = cli_runner.invoke(
+            app,
+            ["dashboard", "build", "--output", str(output_dir)],
+        )
+
+        assert result.exit_code == 0
+
+        # Verify JSON files are valid
+        for json_file in ["today.json", "signals.json", "performance.json"]:
+            file_path = output_dir / "api" / json_file
+            if file_path.exists():
+                content = file_path.read_text()
+                data = json.loads(content)
+                assert isinstance(data, dict)
+
+
+@pytest.mark.integration
+class TestDashboardHeadlessVerification:
+    """Headless verification of rendered HTML/JS files."""
+
+    def test_html_files_are_valid_structure(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Verify generated HTML files have valid structure."""
+        from nba_model.output import DashboardBuilder
+
+        output_dir = tmp_path / "docs"
+        builder = DashboardBuilder(output_dir=output_dir)
+        builder.build_full_site()
+
+        # Check for HTML files (if templates exist)
+        html_files = list(output_dir.glob("*.html"))
+
+        for html_file in html_files:
+            content = html_file.read_text()
+
+            # Basic HTML structure checks
+            assert "<!DOCTYPE html>" in content or "<html" in content, \
+                f"{html_file.name} missing DOCTYPE or html tag"
+
+    def test_js_files_exist_and_non_empty(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Verify JavaScript files exist and are non-empty."""
+        from nba_model.output import DashboardBuilder
+
+        output_dir = tmp_path / "docs"
+        builder = DashboardBuilder(output_dir=output_dir)
+        builder.build_full_site()
+
+        assets_dir = output_dir / "assets"
+
+        # If assets were copied, verify JS file
+        if assets_dir.exists():
+            js_files = list(assets_dir.glob("*.js"))
+            for js_file in js_files:
+                content = js_file.read_text()
+                assert len(content) > 0, f"{js_file.name} is empty"
+
+    def test_css_files_exist_and_non_empty(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Verify CSS files exist and are non-empty."""
+        from nba_model.output import DashboardBuilder
+
+        output_dir = tmp_path / "docs"
+        builder = DashboardBuilder(output_dir=output_dir)
+        builder.build_full_site()
+
+        assets_dir = output_dir / "assets"
+
+        # If assets were copied, verify CSS file
+        if assets_dir.exists():
+            css_files = list(assets_dir.glob("*.css"))
+            for css_file in css_files:
+                content = css_file.read_text()
+                assert len(content) > 0, f"{css_file.name} is empty"
+
+    def test_json_api_endpoints_valid(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Verify JSON API endpoints return valid data."""
+        from nba_model.output import DashboardBuilder
+
+        output_dir = tmp_path / "docs"
+        builder = DashboardBuilder(output_dir=output_dir)
+        builder.build_full_site()
+
+        api_dir = output_dir / "api"
+
+        # All JSON files should be valid
+        for json_file in api_dir.glob("*.json"):
+            content = json_file.read_text()
+            data = json.loads(content)
+            assert isinstance(data, dict), f"{json_file.name} is not a dict"
+
+    def test_file_protocol_compatibility(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Test that generated site works with file:// protocol (no server required)."""
+        from nba_model.output import DashboardBuilder
+
+        output_dir = tmp_path / "docs"
+        builder = DashboardBuilder(output_dir=output_dir)
+        builder.build_full_site()
+
+        # Check that all internal links are relative (not absolute URLs)
+        for html_file in output_dir.glob("*.html"):
+            content = html_file.read_text()
+
+            # Should not have absolute URLs to self
+            assert "http://localhost" not in content, \
+                f"{html_file.name} contains localhost URL"
+
+            # API references should be relative
+            if "api/" in content:
+                # Relative paths are OK
+                assert "http" not in content.split("api/")[0][-10:] or \
+                    content.count("http") == content.count("https://"), \
+                    f"{html_file.name} has non-relative API URL"

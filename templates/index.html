@@ -6,13 +6,33 @@
 <div class="dashboard-header">
     <h1>NBA Model Dashboard</h1>
     <div class="header-meta">
-        <span class="model-badge">Model v1.0.0</span>
-        <span class="status-badge status-healthy">Healthy</span>
+        <span class="model-badge">Model {{ model_info.version|default('v1.0.0') }}</span>
+        <span class="status-badge status-{{ health.status|default('healthy') }}">{{ health.status|default('healthy')|upper }}</span>
     </div>
 </div>
 
-<!-- Summary Stats Cards -->
+<!-- Performance Summary Stats (Win Rate, ROI, CLV, Total Bets) -->
 <section class="stats-cards">
+    <div class="stat-card {{ 'positive' if (performance.win_rate|default(0)) > 0.52 else '' }}">
+        <div class="stat-value">{{ "%.1f%%"|format((performance.win_rate|default(0)) * 100) }}</div>
+        <div class="stat-label">Win Rate</div>
+    </div>
+    <div class="stat-card {{ 'positive' if (performance.roi|default(0)) > 0 else 'negative' }}">
+        <div class="stat-value">{{ "%.1f%%"|format((performance.roi|default(0)) * 100) }}</div>
+        <div class="stat-label">ROI</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ "%.2f%%"|format((performance.clv|default(0)) * 100) }}</div>
+        <div class="stat-label">CLV</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ performance.total_bets|default(0) }}</div>
+        <div class="stat-label">Total Bets</div>
+    </div>
+</section>
+
+<!-- Today's Stats -->
+<section class="stats-cards compact">
     <div class="stat-card">
         <div class="stat-value">{{ summary.total_games|default(0) }}</div>
         <div class="stat-label">Games Today</div>

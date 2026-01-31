@@ -38,7 +38,50 @@
             <p>{{ model_info.training_games|default('N/A') }} games</p>
             <p>{{ model_info.training_data_start|default('N/A') }} to {{ model_info.training_data_end|default('N/A') }}</p>
         </div>
+        <div class="info-card">
+            <h3>Monitoring</h3>
+            <p class="drift-check-time">
+                Last Drift Check: {{ health.last_drift_check|default('N/A') }}
+            </p>
+            <p class="next-retrain">
+                Next Scheduled Retrain: {{ health.next_retrain_date|default('N/A') }}
+            </p>
+        </div>
     </div>
+</section>
+
+<!-- Feature Importance Section -->
+<section class="section">
+    <h2>Feature Importance</h2>
+    {% if model_info.feature_importance %}
+    <div class="table-responsive">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Feature</th>
+                    <th>Importance</th>
+                    <th>Category</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for feature in model_info.feature_importance %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td>{{ feature.name }}</td>
+                    <td>
+                        <div class="importance-bar" style="width: {{ feature.importance * 100 }}%"></div>
+                        <span>{{ "%.4f"|format(feature.importance) }}</span>
+                    </td>
+                    <td>{{ feature.category|default('general') }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="no-data">Feature importance data not available</p>
+    {% endif %}
 </section>
 
 <!-- Health Status Section -->

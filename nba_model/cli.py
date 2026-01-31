@@ -3437,7 +3437,7 @@ def dashboard_deploy(
     """Deploy to GitHub Pages.
 
     Commits and pushes docs/ directory to deploy via GitHub Pages.
-    Requires clean working directory.
+    Requires clean working directory (except for docs/ changes).
     """
     import subprocess
 
@@ -3450,6 +3450,32 @@ def dashboard_deploy(
         if not os.path.exists("docs"):
             console.print("[red]Error: docs/ directory not found. Run 'dashboard build' first.[/red]")
             raise typer.Exit(1)
+
+        # Check for clean working directory (excluding docs/)
+        # First, check overall status
+        clean_check = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+        )
+
+        if clean_check.stdout.strip():
+            # There are changes - check if they're only in docs/
+            changes = clean_check.stdout.strip().split("\n")
+            non_docs_changes = [
+                line for line in changes
+                if line.strip() and not line[3:].startswith("docs/")
+            ]
+
+            if non_docs_changes:
+                console.print("[red]Error: Working directory is not clean.[/red]")
+                console.print("[yellow]The following files have uncommitted changes outside docs/:[/yellow]")
+                for change in non_docs_changes[:10]:  # Show first 10
+                    console.print(f"  {change}")
+                if len(non_docs_changes) > 10:
+                    console.print(f"  ... and {len(non_docs_changes) - 10} more")
+                console.print("\n[yellow]Please commit or stash changes before deploying.[/yellow]")
+                raise typer.Exit(1)
 
         # Check for uncommitted changes in docs/
         result = subprocess.run(

@@ -6,6 +6,14 @@
 <div class="page-header">
     <h1>Performance History</h1>
     <p class="subtitle">Period: {{ metrics.period|default('month')|title }}</p>
+    <!-- Date Range Controls -->
+    <div class="date-range-controls">
+        <label for="start-date">From:</label>
+        <input type="date" id="start-date" value="{{ date_range.start|default('') }}" onchange="filterDateRange()">
+        <label for="end-date">To:</label>
+        <input type="date" id="end-date" value="{{ date_range.end|default('') }}" onchange="filterDateRange()">
+        <button class="btn btn-secondary" onclick="resetDateRange()">Reset</button>
+    </div>
 </div>
 
 <!-- Performance Summary Cards -->
@@ -66,6 +74,12 @@
     <h2>Performance Charts</h2>
     <div class="charts-grid">
         <div class="chart-wrapper">
+            <h3>ROI Time Series</h3>
+            <div class="chart-container">
+                <canvas id="roiTimeSeriesChart"></canvas>
+            </div>
+        </div>
+        <div class="chart-wrapper">
             <h3>ROI by Month</h3>
             <div class="chart-container">
                 <canvas id="roiChart"></canvas>
@@ -75,6 +89,12 @@
             <h3>Calibration Curve</h3>
             <div class="chart-container">
                 <canvas id="calibrationChart"></canvas>
+            </div>
+        </div>
+        <div class="chart-wrapper">
+            <h3>Bet Type Breakdown</h3>
+            <div class="chart-container">
+                <canvas id="betTypePieChart"></canvas>
             </div>
         </div>
     </div>
@@ -114,10 +134,92 @@
 </section>
 {% endblock %}
 
+<!-- Bet History Table -->
+<section class="section">
+    <h2>Bet History</h2>
+    <div class="table-controls">
+        <input type="text" id="bet-search" placeholder="Search bets..." onkeyup="filterBetHistory()">
+        <select id="bet-filter" onchange="filterBetHistory()">
+            <option value="">All Results</option>
+            <option value="win">Wins</option>
+            <option value="loss">Losses</option>
+            <option value="push">Pushes</option>
+        </select>
+    </div>
+    {% if bet_history %}
+    <div class="table-responsive">
+        <table class="data-table sortable" id="bet-history-table">
+            <thead>
+                <tr>
+                    <th data-sort="date">Date</th>
+                    <th data-sort="matchup">Matchup</th>
+                    <th data-sort="type">Bet Type</th>
+                    <th data-sort="side">Side</th>
+                    <th data-sort="odds">Odds</th>
+                    <th data-sort="stake">Stake</th>
+                    <th data-sort="result">Result</th>
+                    <th data-sort="profit">Profit</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for bet in bet_history %}
+                <tr class="bet-row {{ bet.result|lower }}">
+                    <td>{{ bet.date }}</td>
+                    <td>{{ bet.matchup }}</td>
+                    <td>{{ bet.bet_type|title }}</td>
+                    <td>{{ bet.side|upper }}</td>
+                    <td>{{ "%.2f"|format(bet.odds) }}</td>
+                    <td>{{ "%.2f%%"|format(bet.stake_pct * 100) }}</td>
+                    <td>
+                        <span class="result-badge {{ bet.result|lower }}">
+                            {{ bet.result|upper }}
+                        </span>
+                    </td>
+                    <td class="{{ 'positive' if (bet.profit|default(0)) > 0 else 'negative' }}">
+                        {{ "%+.2f%%"|format((bet.profit_pct|default(0)) * 100) }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="no-data">No bet history available</p>
+    {% endif %}
+</section>
+{% endblock %}
+
 {% block scripts %}
 <script>
     // Load and render charts
+    loadROITimeSeriesChart('roiTimeSeriesChart', 'api/performance.json');
     loadROIChart('roiChart', 'api/performance.json');
     loadCalibrationChart('calibrationChart', 'api/performance.json');
+    loadBetTypePieChart('betTypePieChart', 'api/performance.json');
+
+    // Filter functions
+    function filterDateRange() {
+        const start = document.getElementById('start-date').value;
+        const end = document.getElementById('end-date').value;
+        // Reload data with date range filter
+        window.location.href = `?start=${start}&end=${end}`;
+    }
+
+    function resetDateRange() {
+        window.location.href = window.location.pathname;
+    }
+
+    function filterBetHistory() {
+        const search = document.getElementById('bet-search').value.toLowerCase();
+        const filter = document.getElementById('bet-filter').value;
+        const rows = document.querySelectorAll('#bet-history-table tbody tr');
+
+        rows.forEach(row => {
+            const text = row.textContent.toLowerCase();
+            const result = row.classList.contains(filter) || filter === '';
+            const matchesSearch = text.includes(search);
+            row.style.display = (result && matchesSearch) ? '' : 'none';
+        });
+    }
 </script>
 {% endblock %}
