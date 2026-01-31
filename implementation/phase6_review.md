@@ -89,3 +89,61 @@ Reviewer: Codex
 ## Overall Assessment
 
 Phase 6 has strong foundational class implementations, but key requirements are incomplete: CLI commands are still stubs, version comparison with live inference is not implemented, metadata schema does not match the spec, integration tests are missing, and tests do not fully meet stated requirements. The documented “Phase 6 - Complete” status is premature. Additional work is required before Phase 6 can be considered compliant.
+
+---
+
+## Loop 1 Results (Post-Fix Review)
+
+### Resolved Issues
+1. **CLI monitor drift non-functional** → **RESOLVED**
+   - `nba-model monitor drift` now builds reference/recent DataFrames, runs `DriftDetector.check_drift()`, and exits with code 1 on drift detection.
+   - File: `nba_model/cli.py`
+
+2. **Metadata schema mismatch (missing created_at)** → **RESOLVED**
+   - `created_at` is now written into `metadata.json` via `ModelRegistry.save_model()`.
+   - File: `nba_model/models/registry.py`
+
+3. **Version listing order not per spec** → **RESOLVED**
+   - `ModelVersionManager.list_versions()` now sorts by `created_at` descending.
+   - File: `nba_model/monitor/versioning.py`
+
+4. **Missing Phase 6 integration tests** → **RESOLVED**
+   - Added `tests/integration/test_monitor_pipeline.py` covering drift, trigger, and version lifecycle.
+   - File: `tests/integration/test_monitor_pipeline.py`
+
+5. **Unit test gaps (PSI threshold + empty dataframe)** → **RESOLVED**
+   - PSI heavy-shift test now asserts `> 0.2`, and empty-dataframe edge cases were added.
+   - File: `tests/unit/monitor/test_drift.py`
+
+### Unresolved Issues
+1. **CLI monitor trigger uses placeholder performance context** → **UNRESOLVED**
+   - The trigger context still passes `recent_bets=[]`, so the performance trigger can never activate from real bet history.
+   - File: `nba_model/cli.py`
+
+2. **Live version comparison not implemented** → **UNRESOLVED**
+   - `_compute_metrics_on_data()` still does not run inference on `test_data`; it returns stored metrics even when test data is supplied.
+   - File: `nba_model/monitor/versioning.py`
+
+3. **CLAUDE.md inaccuracies** → **UNRESOLVED**
+   - `nba_model/monitor/CLAUDE.md` declares “Phase 6 - Complete” despite unresolved requirements (live comparison + trigger context).
+   - File: `nba_model/monitor/CLAUDE.md`
+
+---
+
+## New Issues Found (Loop 1)
+
+1. **CLI drift reference window does not use last training period**
+   - `monitor drift` uses a fixed “recent window + prior window” heuristic instead of reference data from the last training period as required by `plan/phase6.md`.
+   - File: `nba_model/cli.py`
+
+2. **CLI drift only supplies a subset of monitored features**
+   - Reference/recent DataFrames only include `pace`, `offensive_rating`, and `fg3a_rate`. The monitored list also expects `rest_days`, `travel_distance`, and `rapm_mean`, so those features are silently skipped.
+   - File: `nba_model/cli.py`
+
+---
+
+## Overall Assessment (Loop 1)
+
+**NOT READY**
+
+The Loop 1 fixes addressed several structural gaps (metadata, ordering, tests, CLI drift wiring), but two critical requirements remain incomplete: live version comparison with inference on test data, and full trigger context (recent bets) for performance retraining signals. Additionally, the CLI drift command does not use the last training period as reference and only supplies a subset of monitored features. Documentation still overstates completion. Phase 6 is **not ready for acceptance**.
