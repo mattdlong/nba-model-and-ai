@@ -37,7 +37,7 @@ def sample_scores() -> torch.Tensor:
 @pytest.fixture
 def sample_lineups() -> torch.Tensor:
     """Sample lineup features for transformer testing."""
-    return torch.zeros(2, 50, 20)
+    return torch.zeros(2, 50, 10, dtype=torch.long)
 
 
 @pytest.fixture

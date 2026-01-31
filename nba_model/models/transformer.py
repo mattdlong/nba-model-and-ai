@@ -45,6 +45,8 @@ DEFAULT_NHEAD: int = 4
 DEFAULT_NUM_LAYERS: int = 2
 DEFAULT_MAX_SEQ_LEN: int = 50
 DEFAULT_DROPOUT: float = 0.1
+DEFAULT_PLAYER_EMBED_DIM: int = 16
+DEFAULT_PLAYER_VOCAB_SIZE: int = 10000
 
 # NBA event types from play-by-play EVENTMSGTYPE
 EVENT_VOCAB: dict[int, str] = {
@@ -82,7 +84,7 @@ class TokenizedSequence:
         events: Tensor of event type indices (seq_len,).
         times: Tensor of normalized time remaining (seq_len, 1).
         scores: Tensor of normalized score differential (seq_len, 1).
-        lineups: Tensor of lineup encoding (seq_len, 20).
+        lineups: Tensor of lineup player IDs (seq_len, 10).
         mask: Attention mask for padding (seq_len,).
     """
 
@@ -196,7 +198,7 @@ class GameFlowTransformer(nn.Module):
         >>> events = torch.randint(0, 15, (2, 50))  # batch=2, seq_len=50
         >>> times = torch.rand(2, 50, 1)
         >>> scores = torch.randn(2, 50, 1)
-        >>> lineups = torch.zeros(2, 50, 20)
+        >>> lineups = torch.zeros(2, 50, 10, dtype=torch.long)
         >>> output = model(events, times, scores, lineups)
         >>> print(output.shape)  # (2, 128)
     """
@@ -209,6 +211,8 @@ class GameFlowTransformer(nn.Module):
         num_layers: int = DEFAULT_NUM_LAYERS,
         max_seq_len: int = DEFAULT_MAX_SEQ_LEN,
         dropout: float = DEFAULT_DROPOUT,
+        player_vocab_size: int = DEFAULT_PLAYER_VOCAB_SIZE,
+        player_embed_dim: int = DEFAULT_PLAYER_EMBED_DIM,
     ) -> None:
         """Initialize GameFlowTransformer.
 
@@ -223,6 +227,8 @@ class GameFlowTransformer(nn.Module):
         super().__init__()
         self.d_model = d_model
         self.vocab_size = vocab_size
+        self.player_vocab_size = player_vocab_size
+        self.player_embed_dim = player_embed_dim
 
         # Event type embedding
         self.event_embedding = nn.Embedding(vocab_size, d_model, padding_idx=0)
@@ -234,7 +240,12 @@ class GameFlowTransformer(nn.Module):
         quarter_dim = d_model // 4
         self.time_embedding = nn.Linear(1, quarter_dim)
         self.score_embedding = nn.Linear(1, quarter_dim)
-        self.lineup_embedding = nn.Linear(20, d_model // 2)  # 10 players * 2 teams
+        self.player_embedding = nn.Embedding(
+            player_vocab_size,
+            player_embed_dim,
+            padding_idx=0,
+        )
+        self.lineup_projection = nn.Linear(player_embed_dim * 2, d_model // 2)
 
         # Fusion layer to combine all embeddings
         combined_dim = d_model + quarter_dim + quarter_dim + (d_model // 2)
@@ -259,12 +270,24 @@ class GameFlowTransformer(nn.Module):
         self._init_weights()
 
         logger.debug(
-            "Initialized GameFlowTransformer: vocab={}, d_model={}, nhead={}, layers={}",
+            "Initialized GameFlowTransformer: vocab={}, d_model={}, nhead={}, layers={}, player_vocab={}, player_dim={}",
             vocab_size,
             d_model,
             nhead,
             num_layers,
+            player_vocab_size,
+            player_embed_dim,
         )
+
+    def _bucket_player_ids(self, player_ids: torch.Tensor) -> torch.Tensor:
+        """Map raw player IDs into embedding buckets with padding support."""
+        if self.player_vocab_size <= 1:
+            raise ValueError("player_vocab_size must be > 1 for hashing")
+
+        ids = player_ids.long()
+        # Keep padding as 0; bucket non-zero IDs into [1, vocab_size - 1]
+        bucketed = (ids % (self.player_vocab_size - 1)) + 1
+        return torch.where(ids > 0, bucketed, torch.zeros_like(ids))
 
     def _init_weights(self) -> None:
         """Initialize model weights using Xavier initialization."""
@@ -288,7 +311,7 @@ class GameFlowTransformer(nn.Module):
             events: Event type indices of shape (batch, seq_len).
             times: Normalized time remaining of shape (batch, seq_len, 1).
             scores: Normalized score differential of shape (batch, seq_len, 1).
-            lineups: One-hot lineup encoding of shape (batch, seq_len, 20).
+            lineups: Player ID tensor of shape (batch, seq_len, 10).
             mask: Optional attention mask of shape (batch, seq_len).
                   True values indicate positions to mask (ignore).
 
@@ -305,7 +328,27 @@ class GameFlowTransformer(nn.Module):
         # Embed additional features
         time_emb = self.time_embedding(times)  # (batch, seq_len, d_model // 4)
         score_emb = self.score_embedding(scores)  # (batch, seq_len, d_model // 4)
-        lineup_emb = self.lineup_embedding(lineups)  # (batch, seq_len, d_model // 2)
+        lineup_ids = lineups.long()
+        bucketed = self._bucket_player_ids(lineup_ids)
+        player_emb = self.player_embedding(bucketed)  # (batch, seq_len, 10, player_dim)
+
+        home_ids = lineup_ids[:, :, :5]
+        away_ids = lineup_ids[:, :, 5:]
+
+        home_mask = (home_ids > 0).float().unsqueeze(-1)
+        away_mask = (away_ids > 0).float().unsqueeze(-1)
+
+        home_sum = (player_emb[:, :, :5, :] * home_mask).sum(dim=2)
+        away_sum = (player_emb[:, :, 5:, :] * away_mask).sum(dim=2)
+
+        home_count = home_mask.sum(dim=2).clamp(min=1.0)
+        away_count = away_mask.sum(dim=2).clamp(min=1.0)
+
+        home_emb = home_sum / home_count
+        away_emb = away_sum / away_count
+
+        lineup_features = torch.cat([home_emb, away_emb], dim=-1)
+        lineup_emb = self.lineup_projection(lineup_features)
 
         # Concatenate all embeddings
         combined = torch.cat([event_emb, time_emb, score_emb, lineup_emb], dim=-1)
@@ -352,7 +395,7 @@ class GameFlowTransformer(nn.Module):
             events: Event type indices of shape (batch, seq_len).
             times: Normalized time remaining of shape (batch, seq_len, 1).
             scores: Normalized score differential of shape (batch, seq_len, 1).
-            lineups: One-hot lineup encoding of shape (batch, seq_len, 20).
+            lineups: Player ID tensor of shape (batch, seq_len, 10).
             mask: Optional attention mask of shape (batch, seq_len).
 
         Returns:
@@ -542,16 +585,11 @@ class EventTokenizer:
         plays: pd.DataFrame,
         stints_df: pd.DataFrame | None,
     ) -> torch.Tensor:
-        """Encode lineup as 20-dim one-hot (10 players, home/away indicator).
+        """Encode lineup as player ID tensor (home 5 + away 5).
 
-        Per specification: 20-dimensional one-hot encoding for 10 on-court players
-        with home/away indicators. All values are binary (0 or 1).
-
-        Encoding structure:
-            - Dims 0-4: Home player positions 1-5 (1.0 if filled)
-            - Dims 5-9: Away player positions 1-5 (1.0 if filled)
-            - Dims 10-14: Home team indicator (1.0 for home player positions)
-            - Dims 15-19: Away team indicator (1.0 for away player positions)
+        Output ordering is fixed:
+            - Dims 0-4: Home player IDs
+            - Dims 5-9: Away player IDs
 
         Args:
             plays: DataFrame of play events with period and pc_time columns.
@@ -559,7 +597,7 @@ class EventTokenizer:
                 period, start_time, end_time columns).
 
         Returns:
-            Tensor of lineup encodings (seq_len, 20).
+            Tensor of lineup player IDs (seq_len, 10).
         """
         import json
 
@@ -567,7 +605,7 @@ class EventTokenizer:
 
         if stints_df is None or stints_df.empty:
             # Return zeros if no lineup data available
-            return torch.zeros(seq_len, 20, dtype=torch.float32)
+            return torch.zeros(seq_len, 10, dtype=torch.long)
 
         # Build lineup encodings for each play
         lineup_encodings = []
@@ -616,29 +654,23 @@ class EventTokenizer:
             play_time = self._parse_time_to_seconds(pc_time)
 
             # Find matching stint
-            encoding = torch.zeros(20, dtype=torch.float32)
+            encoding = torch.zeros(10, dtype=torch.long)
 
             if period in stints_by_period:
                 for stint in stints_by_period[period]:
                     # Check if play falls within stint time range
                     # Note: start_time > end_time since clock counts down
                     if stint["end_time"] <= play_time <= stint["start_time"]:
-                        # 20-dim one-hot encoding per spec:
-                        # Dims 0-4: Home player positions (binary)
-                        for i in range(min(5, len(stint["home_lineup"]))):
-                            encoding[i] = 1.0
+                        home_lineup = [int(pid) for pid in stint["home_lineup"]][:5]
+                        away_lineup = [int(pid) for pid in stint["away_lineup"]][:5]
 
-                        # Dims 5-9: Away player positions (binary)
-                        for i in range(min(5, len(stint["away_lineup"]))):
-                            encoding[5 + i] = 1.0
+                        if len(home_lineup) < 5:
+                            home_lineup.extend([0] * (5 - len(home_lineup)))
+                        if len(away_lineup) < 5:
+                            away_lineup.extend([0] * (5 - len(away_lineup)))
 
-                        # Dims 10-14: Home team indicator (binary)
-                        for i in range(min(5, len(stint["home_lineup"]))):
-                            encoding[10 + i] = 1.0
-
-                        # Dims 15-19: Away team indicator (binary)
-                        for i in range(min(5, len(stint["away_lineup"]))):
-                            encoding[15 + i] = 1.0
+                        encoding[:5] = torch.tensor(home_lineup, dtype=torch.long)
+                        encoding[5:] = torch.tensor(away_lineup, dtype=torch.long)
 
                         break
 
@@ -714,7 +746,7 @@ class EventTokenizer:
         lineups = torch.cat(
             [
                 tokens.lineups,
-                torch.zeros(pad_len, 20),
+                torch.zeros(pad_len, 10, dtype=torch.long),
             ]
         )
 

@@ -61,7 +61,7 @@ class GameSample:
         events: Event type indices tensor (seq_len,).
         times: Normalized time tensor (seq_len, 1).
         scores: Normalized score differential tensor (seq_len, 1).
-        lineups: Lineup encoding tensor (seq_len, 20).
+        lineups: Lineup player ID tensor (seq_len, 10).
         mask: Attention mask tensor (seq_len,).
         graph: PyG Data object for lineup graph.
         context: Context feature tensor (context_dim,).
@@ -261,7 +261,7 @@ class NBADataset(Dataset[GameSample]):
         events = torch.zeros(self.seq_len, dtype=torch.long)
         times = torch.zeros(self.seq_len, 1, dtype=torch.float32)
         scores = torch.zeros(self.seq_len, 1, dtype=torch.float32)
-        lineups = torch.zeros(self.seq_len, 20, dtype=torch.float32)
+        lineups = torch.zeros(self.seq_len, 10, dtype=torch.long)
         mask = torch.ones(self.seq_len, dtype=torch.bool)  # All masked
         return events, times, scores, lineups, mask
 

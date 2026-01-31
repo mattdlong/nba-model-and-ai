@@ -39,7 +39,7 @@ Unit tests for the `nba_model/models/` package covering all model components, tr
 | `sample_events` | Tensor | Event indices (2, 50) |
 | `sample_times` | Tensor | Time features (2, 50, 1) |
 | `sample_scores` | Tensor | Score features (2, 50, 1) |
-| `sample_lineups` | Tensor | Lineup encoding (2, 50, 20) |
+| `sample_lineups` | Tensor | Lineup player IDs (2, 50, 10) |
 | `sample_graph` | Data | PyG graph (10 nodes) |
 | `sample_context` | Tensor | Context features (2, 32) |
 | `sample_plays_df` | DataFrame | Play-by-play events |

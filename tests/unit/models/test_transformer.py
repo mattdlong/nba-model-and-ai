@@ -109,7 +109,7 @@ class TestGameFlowTransformer:
         events = torch.randint(1, 14, (1, 50))
         times = torch.rand(1, 50, 1)
         scores = torch.randn(1, 50, 1)
-        lineups = torch.zeros(1, 50, 20)
+        lineups = torch.zeros(1, 50, 10, dtype=torch.long)
 
         output = transformer_model(events, times, scores, lineups)
         assert output.shape == (1, transformer_model.d_model)
@@ -191,7 +191,7 @@ class TestEventTokenizer:
         assert tokens.events.shape == (seq_len,)
         assert tokens.times.shape == (seq_len, 1)
         assert tokens.scores.shape == (seq_len, 1)
-        assert tokens.lineups.shape == (seq_len, 20)
+        assert tokens.lineups.shape == (seq_len, 10)
         assert tokens.mask.shape == (seq_len,)
 
     def test_pad_sequence(

@@ -103,7 +103,7 @@ class TestGameSample:
             events=torch.zeros(50, dtype=torch.long),
             times=torch.zeros(50, 1),
             scores=torch.zeros(50, 1),
-            lineups=torch.zeros(50, 20),
+            lineups=torch.zeros(50, 10, dtype=torch.long),
             mask=torch.zeros(50, dtype=torch.bool),
             graph=Data(x=torch.zeros(10, 16), edge_index=torch.zeros(2, 0, dtype=torch.long)),
             context=torch.zeros(32),

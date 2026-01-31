@@ -26,6 +26,14 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("KMP_DISABLE_SHM", "1")
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+os.environ.setdefault("OMP_DYNAMIC", "FALSE")
+os.environ.setdefault("MKL_DYNAMIC", "FALSE")
+os.environ.setdefault("KMP_INIT_AT_FORK", "FALSE")
+os.environ.setdefault("KMP_BLOCKTIME", "0")
+os.environ.setdefault("KMP_AFFINITY", "disabled")
+os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
 from collections.abc import Generator
 from datetime import date, datetime
@@ -236,5 +244,14 @@ def frozen_today() -> date:
 
 def pytest_configure(config: pytest.Config) -> None:
     """Register custom markers."""
+    try:
+        import torch
+
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+    except Exception:
+        # If torch fails to import, tests will surface the root error.
+        pass
+
     config.addinivalue_line("markers", "slow: marks tests as slow")
     config.addinivalue_line("markers", "integration: marks tests as integration tests")

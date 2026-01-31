@@ -83,7 +83,7 @@ class TestNBADataset:
         assert sample.events.shape[0] == 50  # Padded to max_seq_len
         assert sample.times.shape == (50, 1)
         assert sample.scores.shape == (50, 1)
-        assert sample.lineups.shape == (50, 20)
+        assert sample.lineups.shape == (50, 10)
 
     def test_collate_fn_batches_correctly(self) -> None:
         """Collate function should properly batch samples."""
@@ -138,7 +138,7 @@ class TestModelComponents:
         events = torch.randint(0, 15, (batch_size, seq_len))
         times = torch.rand(batch_size, seq_len, 1)
         scores = torch.randn(batch_size, seq_len, 1)
-        lineups = torch.zeros(batch_size, seq_len, 20)
+        lineups = torch.zeros(batch_size, seq_len, 10, dtype=torch.long)
 
         output = model(events, times, scores, lineups)
 
@@ -256,7 +256,7 @@ class TestTrainingPipeline:
             "events": torch.randint(0, 15, (2, 50)),
             "times": torch.rand(2, 50, 1),
             "scores": torch.randn(2, 50, 1),
-            "lineups": torch.zeros(2, 50, 20),
+            "lineups": torch.zeros(2, 50, 10, dtype=torch.long),
             "mask": torch.zeros(2, 50, dtype=torch.bool),
             "graphs": Batch.from_data_list([create_empty_graph(), create_empty_graph()]),
             "context": torch.randn(2, 32),
@@ -412,9 +412,9 @@ class TestLineupEncoding:
         tokens = tokenizer.tokenize_game(plays_df, stints_df)
 
         # Lineups should have non-zero values for the 3 plays
-        assert tokens.lineups.shape == (3, 20)
-        # First 10 slots should indicate players on court
-        assert tokens.lineups[0, :10].sum() > 0
+        assert tokens.lineups.shape == (3, 10)
+        # Lineup IDs should be present for the 3 plays
+        assert tokens.lineups[0].sum() > 0
 
     def test_lineup_encoding_without_stints_returns_zeros(self) -> None:
         """Tokenizer should return zeros when no stint data available."""

@@ -3,6 +3,35 @@
 Date: 2026-01-31
 Reviewer: Codex CLI
 
+## Loop 4 Results (Post-Fix Verification)
+
+**Status: NOT READY**
+
+### Verification of Previously Unresolved Issues
+
+1. **Lineup encoding** - **RESOLVED**
+   - `EventTokenizer._encode_lineups()` now emits player IDs (home 5 + away 5) per event.
+   - `GameFlowTransformer` hashes player IDs into embedding buckets, pools home/away, and projects to lineup features.
+   - Lineup encoding now distinguishes actual player identities instead of constant slot flags.
+
+2. **PyTorch OpenMP crash** - **NOT RESOLVED**
+   - Expanded env vars in `tests/conftest.py` and added `torch.set_num_threads(1)` / `set_num_interop_threads(1)`.
+   - Running tests in this sandbox still aborts with signal 6 (SIGABRT) even with manual env overrides.
+   - Workaround likely requires a clean Python/conda environment outside this sandbox.
+
+### Test Results
+
+```
+Command: source .venv/bin/activate && pytest tests/ -v
+Result: Aborted (signal 6 / SIGABRT)
+```
+
+Coverage **not verified** due to test crash (required: ≥75% overall, ≥80% unit).
+
+**FINAL VERDICT: NOT READY**
+
+---
+
 ## Loop 3 Final Results (Post-Fix Verification)
 
 **Status: NOT READY**
