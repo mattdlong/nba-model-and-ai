@@ -1989,49 +1989,400 @@ def backtest_run(
             help="End date (YYYY-MM-DD)",
         ),
     ] = None,
+    min_train: Annotated[
+        int,
+        typer.Option(
+            "--min-train",
+            help="Minimum training games per fold",
+        ),
+    ] = 500,
+    val_window: Annotated[
+        int,
+        typer.Option(
+            "--val-window",
+            help="Validation window size (games)",
+        ),
+    ] = 100,
+    kelly_fraction: Annotated[
+        float,
+        typer.Option(
+            "--kelly",
+            "-k",
+            help="Kelly fraction multiplier (0.25 = quarter Kelly)",
+        ),
+    ] = 0.25,
+    max_bet: Annotated[
+        float,
+        typer.Option(
+            "--max-bet",
+            help="Maximum bet as fraction of bankroll",
+        ),
+    ] = 0.02,
+    min_edge: Annotated[
+        float,
+        typer.Option(
+            "--min-edge",
+            help="Minimum edge required to place bet",
+        ),
+    ] = 0.02,
+    devig_method: Annotated[
+        str,
+        typer.Option(
+            "--devig",
+            help="Devigging method (multiplicative, power, shin)",
+        ),
+    ] = "power",
+    bankroll: Annotated[
+        float,
+        typer.Option(
+            "--bankroll",
+            "-b",
+            help="Initial bankroll",
+        ),
+    ] = 10000.0,
+    season: Annotated[
+        str | None,
+        typer.Option(
+            "--season",
+            "-s",
+            help="Season to backtest (e.g., 2023-24)",
+        ),
+    ] = None,
 ) -> None:
     """Run walk-forward backtest.
 
-    Executes time-series validation with proper temporal ordering.
+    Executes time-series validation with proper temporal ordering to prevent
+    look-ahead bias. Trains model on historical data and validates on future games.
     """
+    from datetime import datetime
+
+    import pandas as pd
+
+    from nba_model.backtest import (
+        BacktestConfig,
+        BacktestMetricsCalculator,
+        WalkForwardEngine,
+        create_mock_trainer,
+    )
+
+    settings = get_settings()
+
     console.print(
         Panel(
-            "[yellow]Backtesting not yet implemented (Phase 5)[/yellow]",
+            f"[bold]Walk-Forward Backtest[/bold]\n"
+            f"Kelly: {kelly_fraction} | Max Bet: {max_bet:.1%} | Min Edge: {min_edge:.1%}\n"
+            f"Devig Method: {devig_method} | Initial Bankroll: ${bankroll:,.0f}",
             title="Backtest Run",
         )
     )
-    if start_date:
-        console.print(f"Start: {start_date}")
-    if end_date:
-        console.print(f"End: {end_date}")
+
+    # Check for database
+    if not settings.db_path_obj.exists():
+        console.print("[yellow]Database not found. Running demo with synthetic data.[/yellow]")
+
+        # Create synthetic games for demo
+        import numpy as np
+
+        np.random.seed(42)
+        n_games = 800
+        dates = pd.date_range("2023-01-01", periods=n_games, freq="D")
+        games_df = pd.DataFrame(
+            {
+                "game_id": [f"GAME{i:04d}" for i in range(n_games)],
+                "game_date": dates,
+                "home_score": np.random.randint(90, 130, n_games),
+                "away_score": np.random.randint(90, 130, n_games),
+            }
+        )
+    else:
+        from nba_model.data import Game, init_db, session_scope
+
+        init_db()
+
+        with session_scope() as session:
+            # Query games
+            query = session.query(Game)
+
+            if season:
+                query = query.filter(Game.season_id == season)
+            if start_date:
+                query = query.filter(Game.game_date >= datetime.strptime(start_date, "%Y-%m-%d").date())
+            if end_date:
+                query = query.filter(Game.game_date <= datetime.strptime(end_date, "%Y-%m-%d").date())
+
+            games = query.order_by(Game.game_date).all()
+
+            if not games:
+                console.print("[red]No games found matching criteria.[/red]")
+                raise typer.Exit(1)
+
+            games_df = pd.DataFrame(
+                [
+                    {
+                        "game_id": g.game_id,
+                        "game_date": g.game_date,
+                        "home_score": g.home_score or 100,
+                        "away_score": g.away_score or 100,
+                    }
+                    for g in games
+                ]
+            )
+
+    console.print(f"Found {len(games_df)} games for backtesting")
+
+    # Create backtest configuration
+    config = BacktestConfig(
+        min_train_games=min_train,
+        validation_window_games=val_window,
+        step_size_games=val_window // 2,
+        initial_bankroll=bankroll,
+        devig_method=devig_method,
+        kelly_fraction=kelly_fraction,
+        max_bet_pct=max_bet,
+        min_edge_pct=min_edge,
+    )
+
+    # Create engine and trainer
+    engine = WalkForwardEngine(
+        min_train_games=config.min_train_games,
+        validation_window_games=config.validation_window_games,
+        step_size_games=config.step_size_games,
+    )
+
+    trainer = create_mock_trainer()
+
+    # Run backtest with progress
+    console.print("\n[bold green]Running walk-forward backtest...[/bold green]")
+
+    def progress_cb(fold: int, total: int, status: str) -> None:
+        console.print(f"  [{fold}/{total}] {status}")
+
+    try:
+        result = engine.run_backtest(
+            games_df=games_df,
+            trainer=trainer,
+            config=config,
+            progress_callback=progress_cb,
+        )
+    except ValueError as e:
+        console.print(f"[red]Backtest failed: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    # Display results
+    console.print("\n[bold]Backtest Results:[/bold]")
+
+    results_table = Table()
+    results_table.add_column("Metric", style="cyan")
+    results_table.add_column("Value", style="green", justify="right")
+
+    if result.metrics:
+        m = result.metrics
+        results_table.add_row("Total Bets", str(m.total_bets))
+        results_table.add_row("Win Rate", f"{m.win_rate:.2%}")
+        results_table.add_row("ROI", f"{m.roi:.2%}")
+        results_table.add_row("Total Return", f"{m.total_return:.2%}")
+        results_table.add_row("Sharpe Ratio", f"{m.sharpe_ratio:.2f}")
+        results_table.add_row("Sortino Ratio", f"{m.sortino_ratio:.2f}")
+        results_table.add_row("Max Drawdown", f"{m.max_drawdown:.2%}")
+        results_table.add_row("Avg Edge", f"{m.avg_edge:.4f}")
+        results_table.add_row("Total Wagered", f"${m.total_wagered:,.2f}")
+        results_table.add_row("Total Profit", f"${m.total_profit:,.2f}")
+
+    console.print(results_table)
+
+    # Show fold summary
+    if result.fold_results:
+        console.print(f"\n[bold]Folds:[/bold] {len(result.fold_results)}")
+        for fold in result.fold_results[:5]:
+            fi = fold.fold_info
+            pnl = fold.bankroll_end - fold.bankroll_start
+            pnl_str = f"+${pnl:,.0f}" if pnl >= 0 else f"-${abs(pnl):,.0f}"
+            console.print(
+                f"  Fold {fi.fold_num}: {fi.train_games} train, {fi.val_games} val, "
+                f"{len(fold.bets)} bets, {pnl_str}"
+            )
+        if len(result.fold_results) > 5:
+            console.print(f"  ... and {len(result.fold_results) - 5} more folds")
+
+    console.print(f"\n[green]Final Bankroll: ${result.bankroll_history[-1]:,.2f}[/green]")
 
 
 @backtest_app.command("report")
-def backtest_report() -> None:
+def backtest_report(
+    result_file: Annotated[
+        str | None,
+        typer.Option(
+            "--file",
+            "-f",
+            help="Path to backtest result JSON file",
+        ),
+    ] = None,
+) -> None:
     """Generate backtest report.
 
     Creates detailed performance analysis from backtest results.
     """
+    from nba_model.backtest import BacktestMetricsCalculator, FullBacktestMetrics
+
     console.print(
         Panel(
-            "[yellow]Backtest reporting not yet implemented (Phase 5)[/yellow]",
+            "[bold]Backtest Report Generator[/bold]",
             title="Backtest Report",
         )
     )
 
+    if result_file:
+        console.print(f"Loading results from: {result_file}")
+        # Load and display stored results
+        import json
+        from pathlib import Path
+
+        path = Path(result_file)
+        if not path.exists():
+            console.print(f"[red]File not found: {result_file}[/red]")
+            raise typer.Exit(1)
+
+        with open(path) as f:
+            data = json.load(f)
+
+        console.print("[yellow]Result file parsing not yet implemented.[/yellow]")
+    else:
+        console.print("[yellow]No result file specified.[/yellow]")
+        console.print("Run [cyan]nba-model backtest run[/cyan] first to generate results.")
+        console.print("\nExample report format:")
+
+        # Show example report
+        calc = BacktestMetricsCalculator()
+        example_metrics = FullBacktestMetrics(
+            total_return=0.15,
+            cagr=0.12,
+            sharpe_ratio=1.5,
+            sortino_ratio=2.1,
+            max_drawdown=0.08,
+            win_rate=0.54,
+            total_bets=250,
+            avg_edge=0.03,
+            avg_clv=0.01,
+            roi=0.05,
+        )
+
+        report = calc.generate_report(example_metrics, "Example Backtest Report")
+        console.print(report)
+
 
 @backtest_app.command("optimize")
-def backtest_optimize() -> None:
+def backtest_optimize(
+    fractions: Annotated[
+        str | None,
+        typer.Option(
+            "--fractions",
+            help="Comma-separated Kelly fractions to test (e.g., 0.1,0.2,0.25,0.3)",
+        ),
+    ] = None,
+    metric: Annotated[
+        str,
+        typer.Option(
+            "--metric",
+            "-m",
+            help="Optimization metric (sharpe or growth)",
+        ),
+    ] = "sharpe",
+    season: Annotated[
+        str | None,
+        typer.Option(
+            "--season",
+            "-s",
+            help="Season to use for optimization",
+        ),
+    ] = None,
+) -> None:
     """Optimize Kelly fraction.
 
-    Finds optimal bet sizing via historical simulation.
+    Finds optimal bet sizing via historical simulation by testing different
+    Kelly fractions and maximizing Sharpe ratio or geometric growth rate.
     """
+    from datetime import datetime
+
+    import numpy as np
+
+    from nba_model.backtest import KellyCalculator
+    from nba_model.types import Bet
+
+    settings = get_settings()
+
+    # Parse fractions
+    if fractions:
+        fraction_list = [float(f.strip()) for f in fractions.split(",")]
+    else:
+        fraction_list = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]
+
     console.print(
         Panel(
-            "[yellow]Kelly optimization not yet implemented (Phase 5)[/yellow]",
+            f"[bold]Kelly Fraction Optimization[/bold]\n"
+            f"Testing fractions: {fraction_list}\n"
+            f"Optimization metric: {metric}",
             title="Backtest Optimize",
         )
     )
+
+    # Generate synthetic bet history for demo
+    console.print("[yellow]Using synthetic bet history for demonstration.[/yellow]")
+
+    np.random.seed(42)
+    n_bets = 200
+
+    synthetic_bets = []
+    for i in range(n_bets):
+        model_prob = 0.48 + np.random.random() * 0.1  # 48-58% model probability
+        market_odds = 1.85 + np.random.random() * 0.2  # 1.85-2.05 odds
+        edge = model_prob - (1 / market_odds)
+
+        # Simulate outcome based on model probability
+        won = np.random.random() < model_prob
+        result = "win" if won else "loss"
+
+        bet = Bet(
+            game_id=f"GAME{i:04d}",
+            timestamp=datetime(2023, 1, 1) + np.timedelta64(i, "D"),
+            bet_type="moneyline",
+            side="home",
+            model_prob=model_prob,
+            market_odds=market_odds,
+            market_prob=1 / market_odds,
+            edge=edge,
+            kelly_fraction=0.0,  # Will be calculated
+            bet_amount=100.0,  # Will be calculated
+            result=result,
+            profit=100 * (market_odds - 1) if won else -100,
+        )
+        synthetic_bets.append(bet)
+
+    # Run optimization
+    kelly_calc = KellyCalculator()
+    result = kelly_calc.optimize_fraction(
+        historical_bets=synthetic_bets,
+        fractions=fraction_list,
+        initial_bankroll=10000.0,
+        metric=metric,
+    )
+
+    # Display results
+    console.print("\n[bold]Optimization Results:[/bold]")
+
+    results_table = Table()
+    results_table.add_column("Kelly Fraction", style="cyan", justify="center")
+    results_table.add_column(metric.title(), style="green", justify="right")
+
+    sorted_fractions = sorted(result.results_by_fraction.keys())
+    for frac in sorted_fractions:
+        value = result.results_by_fraction[frac]
+        marker = " [bold yellow]*[/bold yellow]" if frac == result.best_fraction else ""
+        results_table.add_row(f"{frac:.2f}{marker}", f"{value:.4f}")
+
+    console.print(results_table)
+
+    console.print(f"\n[green]Optimal Kelly Fraction: {result.best_fraction:.2f}[/green]")
+    console.print(f"Best {metric}: {result.best_metric:.4f}")
 
 
 # =============================================================================

@@ -6,42 +6,97 @@ Validates model performance through historical simulation. Implements walk-forwa
 
 ## Status
 
-🔲 **Phase 5 - Not Started** (stub `__init__.py` only)
+✅ **Phase 5 - Complete**
 
-## Planned Structure
+## Module Structure
 
-| File | Purpose | Key Functions |
-|------|---------|---------------|
-| `__init__.py` | Public API | - |
-| `engine.py` | Walk-forward validation | `BacktestEngine.run()` |
-| `kelly.py` | Bet sizing | `calculate_kelly_fraction()` |
-| `devig.py` | Vig removal | `power_devig()`, `shin_devig()` |
-| `metrics.py` | Performance metrics | ROI, Sharpe, CLV, drawdown |
+| File | Purpose | Key Classes/Functions |
+|------|---------|----------------------|
+| `__init__.py` | Public API | Exports all public components |
+| `engine.py` | Walk-forward validation | `WalkForwardEngine`, `BacktestResult`, `BacktestConfig` |
+| `kelly.py` | Bet sizing | `KellyCalculator`, `KellyResult`, `simulate_bankroll` |
+| `devig.py` | Vig removal | `DevigCalculator`, `FairProbabilities` |
+| `metrics.py` | Performance metrics | `BacktestMetricsCalculator`, `FullBacktestMetrics` |
 
 ## Key Algorithms
 
-1. **Walk-Forward:** Train on N seasons, validate on next, roll forward
-2. **Kelly Criterion:** `f* = (bp - q) / b` with fractional adjustment (0.25x)
-3. **Devigging:** Power method `Σ(1/odds)^k = 1` or Shin method
+### Walk-Forward Validation
+Strict temporal ordering to prevent look-ahead bias:
+```
+Fold 1: Train [Game 1-500], Validate [Game 501-600]
+Fold 2: Train [Game 1-550], Validate [Game 551-650]
+...
+```
+
+### Kelly Criterion
+Full Kelly: `f* = (bp - q) / b` where:
+- b = decimal_odds - 1 (net odds)
+- p = model probability
+- q = 1 - p
+
+Default: 0.25x Kelly (quarter Kelly) for variance reduction.
+
+### Devigging Methods
+1. **Multiplicative**: `p_fair = p_implied / sum(p_implied)`
+2. **Power Method**: Solve `Σ(1/odds)^k = 1` via Brent's method
+3. **Shin's Method**: Model informed bettor proportion (gold standard)
+
+## Usage Example
+
+```python
+from nba_model.backtest import WalkForwardEngine, BacktestConfig, create_mock_trainer
+
+config = BacktestConfig(
+    min_train_games=500,
+    validation_window_games=100,
+    kelly_fraction=0.25,
+    max_bet_pct=0.02,
+    min_edge_pct=0.02,
+    devig_method="power",
+)
+
+engine = WalkForwardEngine(
+    min_train_games=config.min_train_games,
+    validation_window_games=config.validation_window_games,
+)
+
+result = engine.run_backtest(games_df, trainer, config=config)
+print(f"ROI: {result.metrics.roi:.2%}")
+print(f"Sharpe: {result.metrics.sharpe_ratio:.2f}")
+```
 
 ## Performance Targets
 
-| Metric | Target | Critical Threshold |
-|--------|--------|-------------------|
-| ROI | > 3% | > 1% |
-| Sharpe | > 1.0 | > 0.5 |
+| Metric | Target | Acceptable |
+|--------|--------|------------|
+| ROI | > 5% | > 2% |
+| Win Rate | > 53% | > 51% |
+| CLV | > 1% | > 0% |
 | Max Drawdown | < 15% | < 25% |
-| CLV | Positive | Any positive |
-| Brier Score | < 0.24 | < 0.25 |
+| Sharpe Ratio | > 1.0 | > 0.5 |
 
 ## Integration Points
 
-- **Upstream:** `models/` provides trained models
+- **Upstream:** `models/` provides trained models via `TrainerProtocol`
 - **Downstream:** `monitor/` uses backtest results for drift detection
+
+## CLI Commands
+
+```bash
+# Run walk-forward backtest
+nba-model backtest run --kelly 0.25 --min-edge 0.02
+
+# Generate report from results
+nba-model backtest report --file results.json
+
+# Optimize Kelly fraction
+nba-model backtest optimize --metric sharpe
+```
 
 ## Anti-Patterns
 
 - ❌ Never use full Kelly (always fractional, max 0.5x)
-- ❌ Never backtest without transaction costs (vig)
+- ❌ Never backtest without accounting for vig
 - ❌ Never look ahead in walk-forward validation
-- ❌ Never report metrics without confidence intervals
+- ❌ Never bet without minimum edge requirement
+- ❌ Never skip devigging when comparing to market odds

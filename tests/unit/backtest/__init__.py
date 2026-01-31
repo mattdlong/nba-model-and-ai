@@ -1,1 +1,1 @@
-"""Unit tests for backtest module."""
+"""Tests for the backtest module."""
