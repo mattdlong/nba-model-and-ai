@@ -43,8 +43,35 @@ Note: Per instructions, the OpenMP/Signal 6 crash is a sandbox issue and not att
 5) CLAUDE.md accuracy
 - `nba_model/predict/CLAUDE.md` implies Transformer output uses play-by-play, while implementation always uses zeros for pre-game; documentation should match actual behavior.
 
+## Loop 1 Results (Re-review)
+
+### Previous Issues Status
+
+1) Injury adjustment algorithm (plays/sits expectation)
+- **UNRESOLVED**: `InjuryAdjuster.adjust_prediction_values()` now computes a play/sit expected adjustment, but it still does not run the model for both scenarios as required in `plan/phase7.md`. It uses RAPM-based replacement impact as a proxy instead of re-scoring the two scenarios.
+
+2) Injury data source (real data)
+- **RESOLVED**: `InjuryReportFetcher` now fetches live data from the NBA injury report JSON endpoint with caching and fallback behavior.
+
+3) Dependency injection (InferencePipeline)
+- **RESOLVED**: `InferencePipeline` now accepts injected `context_feature_builder` and `injury_adjuster` dependencies with sensible defaults.
+
+4) Type hints / strict typing
+- **RESOLVED**: Missing return type annotations and TypedDicts were added (e.g., `AdjustmentValuesDict`, `GameInfoDict`, typed returns on methods).
+
+5) CLAUDE.md accuracy + unused imports
+- **RESOLVED**: `nba_model/predict/CLAUDE.md` now documents transformer zeros for pre-game, and the unused `get_settings` import was removed.
+
+### New Issues Found
+
+1) Missing runtime dependency for injury fetcher
+- `nba_model/predict/injuries.py` uses `requests`, but `pyproject.toml` does not include `requests` in dependencies. This makes `InjuryReportFetcher` fail in a clean environment.
+
+2) Dependency injection gap for GNN graph builder
+- `InferencePipeline._get_gnn_output()` instantiates `LineupGraphBuilder` internally. DEVELOPMENT_GUIDELINES require dependency injection for non-trivial dependencies; this is not yet injectable.
+
 ## Overall Assessment
 
 NOT READY
 
-Core structure is in place, but injury adjustment behavior and data fetching do not meet Phase 7 requirements, and there are guideline compliance gaps (dependency injection, typing, lint). Tests and coverage could not be validated due to sandbox OpenMP/Signal 6 errors.
+Core structure is in place, but the injury adjustment algorithm still does not run explicit plays/sits model scenarios as required, and there are new compliance gaps (missing `requests` dependency, non-injected `LineupGraphBuilder`). Tests and coverage could not be validated due to sandbox OpenMP/Signal 6 errors.
