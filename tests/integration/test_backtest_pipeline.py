@@ -386,7 +386,7 @@ class TestMetricsIntegration:
 
         # Calculate metrics using the spec-compliant API
         calc = BacktestMetricsCalculator()
-        metrics_dict = calc.calculate_from_result(result)
+        metrics_dict = calc.calculate_all(result)
 
         # Should return a dictionary
         assert isinstance(metrics_dict, dict)
@@ -414,7 +414,7 @@ class TestMetricsIntegration:
             bankroll += bet.profit or 0.0
             bankroll_history.append(bankroll)
 
-        metrics = calc.calculate_all(
+        metrics = calc.calculate_from_bets(
             bets=synthetic_bets,
             bankroll_history=bankroll_history,
             initial_bankroll=10000.0,
@@ -442,7 +442,7 @@ class TestMetricsIntegration:
             key = (bet.game_id, bet.bet_type, bet.side)
             closing_odds_map[key] = closing_odds
 
-        metrics = calc.calculate_all(
+        metrics = calc.calculate_from_bets(
             bets=synthetic_bets,
             bankroll_history=[10000.0] * (len(synthetic_bets) + 1),
             initial_bankroll=10000.0,

@@ -163,6 +163,11 @@ class BacktestResult:
         """Get average CLV from metrics."""
         return self.metrics.avg_clv if self.metrics else 0.0
 
+    @property
+    def clv(self) -> float:
+        """Get average closing line value across bets (Phase 5 spec property)."""
+        return self.avg_clv
+
 
 @dataclass
 class FoldResult:
@@ -468,7 +473,7 @@ class WalkForwardEngine:
                         else:
                             closing_odds_map[key] = 1.91
 
-        result.metrics = metrics_calc.calculate_all(
+        result.metrics = metrics_calc.calculate_from_bets(
             bets=result.bets,
             bankroll_history=result.bankroll_history,
             initial_bankroll=cfg.initial_bankroll,
@@ -676,8 +681,7 @@ class WalkForwardEngine:
     ) -> Bet | None:
         """Create a spread bet if edge exists.
 
-        This is a simplified implementation - a full version would need
-        point spread probabilities and line values.
+        Uses devigging to get fair market probabilities from spread odds.
         """
         predicted_margin = prediction.get("predicted_margin", 0.0)
         spread = odds.get("spread", -3.5)  # Home spread
@@ -689,22 +693,35 @@ class WalkForwardEngine:
         std_dev = 12.0  # Typical NBA game std dev
         home_cover_prob = float(norm.cdf((predicted_margin - spread) / std_dev))
 
-        # Assume -110 lines for spread
-        spread_odds = 1.91
+        # Get spread odds (home cover and away cover/home fail)
+        # Default to -110 lines (1.91 decimal) if not available
+        home_spread_odds = odds.get("home_spread_odds", 1.91)
+        away_spread_odds = odds.get("away_spread_odds", 1.91)
 
-        # Market prob for -110 spread line is ~0.5 (devigged)
-        market_prob_spread = 0.5
-        home_edge = home_cover_prob - market_prob_spread
+        # Apply devigging to get fair market probabilities
+        try:
+            fair_probs = devig_calc.devig(
+                home_spread_odds, away_spread_odds, config.devig_method
+            )
+            market_prob_home = fair_probs.home
+            market_prob_away = fair_probs.away
+        except Exception:
+            # Fallback to 0.5 if devigging fails
+            market_prob_home = 0.5
+            market_prob_away = 0.5
 
-        if home_edge >= config.min_edge_pct:
+        home_edge = home_cover_prob - market_prob_home
+        away_edge = (1 - home_cover_prob) - market_prob_away
+
+        if home_edge >= config.min_edge_pct and home_edge >= away_edge:
             kelly_result = kelly_calc.calculate(
-                bankroll, home_cover_prob, spread_odds, market_prob=market_prob_spread
+                bankroll, home_cover_prob, home_spread_odds, market_prob=market_prob_home
             )
             if kelly_result.has_edge:
                 home_covered = margin > spread
                 result_str = "win" if home_covered else "loss"
                 profit = (
-                    kelly_result.bet_amount * (spread_odds - 1)
+                    kelly_result.bet_amount * (home_spread_odds - 1)
                     if home_covered
                     else -kelly_result.bet_amount
                 )
@@ -714,9 +731,37 @@ class WalkForwardEngine:
                     bet_type="spread",
                     side="home",
                     model_prob=home_cover_prob,
-                    market_odds=spread_odds,
-                    market_prob=0.5,
+                    market_odds=home_spread_odds,
+                    market_prob=market_prob_home,
                     edge=home_edge,
+                    kelly_fraction=kelly_result.full_kelly,
+                    bet_amount=kelly_result.bet_amount,
+                    result=result_str,
+                    profit=profit,
+                )
+
+        elif away_edge >= config.min_edge_pct:
+            away_cover_prob = 1 - home_cover_prob
+            kelly_result = kelly_calc.calculate(
+                bankroll, away_cover_prob, away_spread_odds, market_prob=market_prob_away
+            )
+            if kelly_result.has_edge:
+                away_covered = margin < spread
+                result_str = "win" if away_covered else "loss"
+                profit = (
+                    kelly_result.bet_amount * (away_spread_odds - 1)
+                    if away_covered
+                    else -kelly_result.bet_amount
+                )
+                return Bet(
+                    game_id=game_id,
+                    timestamp=timestamp,
+                    bet_type="spread",
+                    side="away",
+                    model_prob=away_cover_prob,
+                    market_odds=away_spread_odds,
+                    market_prob=market_prob_away,
+                    edge=away_edge,
                     kelly_fraction=kelly_result.full_kelly,
                     bet_amount=kelly_result.bet_amount,
                     result=result_str,
@@ -737,7 +782,10 @@ class WalkForwardEngine:
         bankroll: float,
         config: BacktestConfig,
     ) -> Bet | None:
-        """Create a total (over/under) bet if edge exists."""
+        """Create a total (over/under) bet if edge exists.
+
+        Uses devigging to get fair market probabilities from total odds.
+        """
         predicted_total = prediction.get("predicted_total", 220.0)
         total_line = odds.get("total", 220.0)
 
@@ -747,22 +795,32 @@ class WalkForwardEngine:
         std_dev = 15.0  # Typical NBA total std dev
         over_prob = float(1 - norm.cdf((total_line - predicted_total) / std_dev))
 
-        # Assume -110 lines, market prob for total is ~0.5 (devigged)
-        total_odds = 1.91
-        market_prob_total = 0.5
+        # Get over/under odds (default to -110 lines / 1.91 decimal)
+        over_odds = odds.get("over_odds", 1.91)
+        under_odds = odds.get("under_odds", 1.91)
 
-        over_edge = over_prob - market_prob_total
-        under_edge = (1 - over_prob) - market_prob_total
+        # Apply devigging to get fair market probabilities
+        try:
+            fair_probs = devig_calc.devig(over_odds, under_odds, config.devig_method)
+            market_prob_over = fair_probs.home  # over treated as "home" in two-way
+            market_prob_under = fair_probs.away
+        except Exception:
+            # Fallback to 0.5 if devigging fails
+            market_prob_over = 0.5
+            market_prob_under = 0.5
+
+        over_edge = over_prob - market_prob_over
+        under_edge = (1 - over_prob) - market_prob_under
 
         if over_edge >= config.min_edge_pct and over_edge >= under_edge:
             kelly_result = kelly_calc.calculate(
-                bankroll, over_prob, total_odds, market_prob=market_prob_total
+                bankroll, over_prob, over_odds, market_prob=market_prob_over
             )
             if kelly_result.has_edge:
                 went_over = actual_total > total_line
                 result_str = "win" if went_over else "loss"
                 profit = (
-                    kelly_result.bet_amount * (total_odds - 1)
+                    kelly_result.bet_amount * (over_odds - 1)
                     if went_over
                     else -kelly_result.bet_amount
                 )
@@ -772,8 +830,8 @@ class WalkForwardEngine:
                     bet_type="total",
                     side="over",
                     model_prob=over_prob,
-                    market_odds=total_odds,
-                    market_prob=0.5,
+                    market_odds=over_odds,
+                    market_prob=market_prob_over,
                     edge=over_edge,
                     kelly_fraction=kelly_result.full_kelly,
                     bet_amount=kelly_result.bet_amount,
@@ -784,13 +842,13 @@ class WalkForwardEngine:
         elif under_edge >= config.min_edge_pct:
             under_prob = 1 - over_prob
             kelly_result = kelly_calc.calculate(
-                bankroll, under_prob, total_odds, market_prob=market_prob_total
+                bankroll, under_prob, under_odds, market_prob=market_prob_under
             )
             if kelly_result.has_edge:
                 went_under = actual_total < total_line
                 result_str = "win" if went_under else "loss"
                 profit = (
-                    kelly_result.bet_amount * (total_odds - 1)
+                    kelly_result.bet_amount * (under_odds - 1)
                     if went_under
                     else -kelly_result.bet_amount
                 )
@@ -800,8 +858,8 @@ class WalkForwardEngine:
                     bet_type="total",
                     side="under",
                     model_prob=under_prob,
-                    market_odds=total_odds,
-                    market_prob=0.5,
+                    market_odds=under_odds,
+                    market_prob=market_prob_under,
                     edge=under_edge,
                     kelly_fraction=kelly_result.full_kelly,
                     bet_amount=kelly_result.bet_amount,

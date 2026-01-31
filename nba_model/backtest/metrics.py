@@ -168,7 +168,7 @@ class BacktestMetricsCalculator:
         >>> report = calc.generate_report(result)
     """
 
-    def calculate_all(
+    def calculate_from_bets(
         self,
         bets: list[Bet],
         bankroll_history: list[float] | None = None,
@@ -176,7 +176,7 @@ class BacktestMetricsCalculator:
         closing_odds: dict[str, float] | None = None,
         closing_odds_map: dict[tuple[str, str, str], float] | None = None,
     ) -> FullBacktestMetrics:
-        """Calculate all performance metrics.
+        """Calculate all performance metrics from bet list.
 
         Args:
             bets: List of Bet objects with outcomes.
@@ -516,15 +516,15 @@ class BacktestMetricsCalculator:
 
         return metrics_by_type
 
-    def calculate_from_result(
+    def calculate_all(
         self,
         result: BacktestResult,
         closing_odds_map: dict[tuple[str, str, str], float] | None = None,
     ) -> dict[str, float | int | dict]:
         """Calculate all metrics from a BacktestResult object.
 
-        This is the spec-compliant API that takes a BacktestResult directly
-        and returns a dictionary of metrics.
+        This is the spec-compliant API (Phase 5 requirement) that takes a
+        BacktestResult directly and returns a dictionary of metrics.
 
         Args:
             result: BacktestResult object from walk-forward backtest.
@@ -537,7 +537,7 @@ class BacktestMetricsCalculator:
             result.config.initial_bankroll if result.config else 10000.0
         )
 
-        metrics = self.calculate_all(
+        metrics = self.calculate_from_bets(
             bets=result.bets,
             bankroll_history=result.bankroll_history,
             initial_bankroll=initial_bankroll,

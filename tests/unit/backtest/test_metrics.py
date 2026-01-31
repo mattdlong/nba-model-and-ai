@@ -78,7 +78,7 @@ class TestBacktestMetricsCalculator:
         self, calc: BacktestMetricsCalculator
     ) -> None:
         """Test empty bet list returns default metrics."""
-        metrics = calc.calculate_all([])
+        metrics = calc.calculate_from_bets([])
         assert metrics.total_bets == 0
         assert metrics.win_rate == 0.0
 
@@ -86,7 +86,7 @@ class TestBacktestMetricsCalculator:
         self, calc: BacktestMetricsCalculator, sample_bets: list[Bet]
     ) -> None:
         """Test win rate calculation."""
-        metrics = calc.calculate_all(sample_bets)
+        metrics = calc.calculate_from_bets(sample_bets)
         # 6 wins out of 10 bets
         assert metrics.win_rate == 0.6
         assert metrics.win_count == 6
@@ -96,7 +96,7 @@ class TestBacktestMetricsCalculator:
         self, calc: BacktestMetricsCalculator, sample_bets: list[Bet]
     ) -> None:
         """Test ROI calculation."""
-        metrics = calc.calculate_all(sample_bets)
+        metrics = calc.calculate_from_bets(sample_bets)
         # 6 wins * 91 + 4 losses * -100 = 546 - 400 = 146
         # Total wagered = 1000
         # ROI = 146/1000 = 0.146
@@ -108,7 +108,7 @@ class TestBacktestMetricsCalculator:
         self, calc: BacktestMetricsCalculator, sample_bets: list[Bet]
     ) -> None:
         """Test total return calculation."""
-        metrics = calc.calculate_all(sample_bets, initial_bankroll=10000.0)
+        metrics = calc.calculate_from_bets(sample_bets, initial_bankroll=10000.0)
         # Profit = 146, Initial = 10000
         # Return = 146/10000 = 0.0146
         assert abs(metrics.total_return - 0.0146) < 0.001
@@ -117,21 +117,21 @@ class TestBacktestMetricsCalculator:
         self, calc: BacktestMetricsCalculator, sample_bets: list[Bet]
     ) -> None:
         """Test average edge calculation."""
-        metrics = calc.calculate_all(sample_bets)
+        metrics = calc.calculate_from_bets(sample_bets)
         assert abs(metrics.avg_edge - 0.027) < 0.001
 
     def test_calculates_avg_odds(
         self, calc: BacktestMetricsCalculator, sample_bets: list[Bet]
     ) -> None:
         """Test average odds calculation."""
-        metrics = calc.calculate_all(sample_bets)
+        metrics = calc.calculate_from_bets(sample_bets)
         assert abs(metrics.avg_odds - 1.91) < 0.001
 
     def test_calculates_volatility(
         self, calc: BacktestMetricsCalculator, sample_bets: list[Bet]
     ) -> None:
         """Test volatility calculation."""
-        metrics = calc.calculate_all(sample_bets)
+        metrics = calc.calculate_from_bets(sample_bets)
         # With mixed wins/losses, should have some volatility
         assert metrics.volatility > 0
 
@@ -139,7 +139,7 @@ class TestBacktestMetricsCalculator:
         self, calc: BacktestMetricsCalculator, sample_bets: list[Bet]
     ) -> None:
         """Test Brier score calculation."""
-        metrics = calc.calculate_all(sample_bets)
+        metrics = calc.calculate_from_bets(sample_bets)
         # Brier = mean((prob - outcome)^2)
         # prob = 0.55 for all
         # For wins (6): (0.55 - 1)^2 = 0.2025
@@ -151,7 +151,7 @@ class TestBacktestMetricsCalculator:
         self, calc: BacktestMetricsCalculator, sample_bets: list[Bet]
     ) -> None:
         """Test log loss calculation."""
-        metrics = calc.calculate_all(sample_bets)
+        metrics = calc.calculate_from_bets(sample_bets)
         # Log loss should be positive
         assert metrics.log_loss > 0
 
@@ -189,7 +189,7 @@ class TestBacktestMetricsCalculator:
                 profit=-100.0,
             ),
         ]
-        metrics = calc.calculate_all(bets)
+        metrics = calc.calculate_from_bets(bets)
 
         assert "moneyline" in metrics.metrics_by_type
         assert "spread" in metrics.metrics_by_type
@@ -298,7 +298,7 @@ class TestCLVCalculation:
         ]
         closing_odds = {"G1": 1.8}  # Favorable movement
 
-        metrics = calc.calculate_all(bets, closing_odds=closing_odds)
+        metrics = calc.calculate_from_bets(bets, closing_odds=closing_odds)
         assert metrics.avg_clv > 0
         assert metrics.clv_positive_rate == 1.0
 

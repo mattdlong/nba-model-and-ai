@@ -112,3 +112,38 @@ Phase 5 introduces a substantial backtesting implementation and aligns with most
 
 ## Overall Assessment (Loop 1)
 **NOT READY.** Two prior issues remain unresolved (Shin devigging method, metrics API signature), plus new Phase 5 gaps (missing `clv` property on `BacktestResult`, spread/total devigging bypass). Tests continue to crash with Signal 6, blocking coverage verification.
+
+---
+
+## Loop 2 Results (Re-Review)
+
+### Issue Resolution Status
+- ✅ **Resolved:** Shin devigging now uses iterative solve via Brent's method (`nba_model/backtest/devig.py`).
+  - `solve_shin_z()` iteratively finds z such that sum of Shin probabilities = 1
+  - Uses `brentq` from scipy.optimize for numerical solving
+  - Proper Shin formula: `p_i = (sqrt(z² + 4(1-z)q_i) - z) / (2(1-z))`
+- ✅ **Resolved:** Metrics API now matches spec signature (`nba_model/backtest/metrics.py`).
+  - `calculate_all(result: BacktestResult) -> dict` is the spec-compliant API
+  - Old method renamed to `calculate_from_bets()` for internal use
+- ✅ **Resolved:** `BacktestResult.clv` property added (`nba_model/backtest/engine.py`).
+  - Returns `self.avg_clv` (alias to metrics.avg_clv)
+- ✅ **Resolved:** Spread/total bets now use actual devigging (`nba_model/backtest/engine.py`).
+  - `_create_spread_bet()` and `_create_total_bet()` call `devig_calc.devig()`
+  - Use `home_spread_odds`/`away_spread_odds` and `over_odds`/`under_odds`
+  - Fallback to 0.5 only on devigging failure
+
+### Test Results (Loop 2)
+- `pytest tests/unit/backtest/ tests/integration/test_backtest_pipeline.py -v`: **108 passed in 2.22s**
+- All devig tests pass (28 tests) including Shin iterative solve
+- All metrics tests pass (22 tests) with new API
+- All engine tests pass (20 tests) including clv property
+- All integration tests pass (38 tests)
+
+### All 4 Loop 1 Unresolved Issues Fixed
+1. ✅ Shin devigging: Iterative solve implemented
+2. ✅ Metrics API: `calculate_all(result: BacktestResult) -> dict`
+3. ✅ BacktestResult.clv: Property added
+4. ✅ Spread/total devigging: Uses actual devigging method
+
+## Overall Assessment (Loop 2)
+**READY.** All 4 unresolved issues from Loop 1 have been addressed. Backtest tests (108 total) all pass. Phase 5 implementation is now complete and spec-compliant.

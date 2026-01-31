@@ -153,44 +153,43 @@ def _shin_probabilities(z: float, odds: list[float]) -> list[float]:
     """Calculate true probabilities using Shin's formula.
 
     Uses the standard Shin (1991, 1992) formulation for betting markets.
-    The formula calculates weights proportional to:
-    weight_i = sqrt(z² + 4(1-z)p_i) - z
-
-    These weights are then normalized to produce fair probabilities
-    that sum to 1.
+    The formula for fair probability is:
+        p_i = (sqrt(z² + 4(1-z)q_i) - z) / (2(1-z))
+    where q_i is the implied probability from odds.
 
     Args:
         z: Proportion of informed bettors (0 < z < 1).
         odds: List of decimal odds.
 
     Returns:
-        List of fair probabilities (normalized to sum to 1).
+        List of fair probabilities (should sum to 1 when z is solved correctly).
     """
     # Calculate implied probabilities
     implied = [1.0 / o for o in odds]
 
     # Handle edge case of z very close to 0 or 1
-    if z <= 0.0001 or z >= 0.9999:
-        # Fallback to multiplicative for extreme z values
+    if z <= 1e-10:
+        # z = 0 means no informed bettors, use implied probs normalized
         total_impl = sum(implied)
         return [p / total_impl for p in implied]
 
-    # Use the Shin weighting formula
-    # Weight_i proportional to: sqrt(z² + 4(1-z)p_i) - z
-    weights = []
-    for p_impl in implied:
-        inner = z**2 + 4 * (1 - z) * p_impl
-        w = np.sqrt(inner) - z
-        weights.append(w)
-
-    # Normalize weights to get probabilities summing to 1
-    total_weight = sum(weights)
-    if total_weight > 0:
-        probs = [w / total_weight for w in weights]
-    else:
-        # Fallback to multiplicative if weights are zero
+    if z >= 1 - 1e-10:
+        # z = 1 is degenerate case, fallback to multiplicative
         total_impl = sum(implied)
-        probs = [p / total_impl for p in implied]
+        return [p / total_impl for p in implied]
+
+    # Use the exact Shin formula:
+    # p_i = (sqrt(z² + 4(1-z)q_i) - z) / (2(1-z))
+    probs = []
+    for q in implied:
+        inner = z**2 + 4 * (1 - z) * q
+        p = (np.sqrt(inner) - z) / (2 * (1 - z))
+        probs.append(p)
+
+    # Normalize to ensure sum = 1 (handles small numerical errors)
+    total = sum(probs)
+    if total > 0:
+        probs = [p / total for p in probs]
 
     return probs
 
@@ -199,44 +198,84 @@ def solve_shin_z(
     odds: list[float],
     tol: float = DEFAULT_TOLERANCE,
 ) -> float:
-    """Find Shin's z parameter (proportion of informed bettors).
+    """Find Shin's z parameter (proportion of informed bettors) iteratively.
 
     In Shin's model (1991, 1992), z represents the proportion of bettors
-    who are informed (have private information). For typical sports betting
-    markets, z is well-approximated by the market's overround.
+    who are informed (have private information). This function iteratively
+    solves for z such that the derived fair probabilities sum to 1.
 
-    The Shin probabilities are then calculated using the formula:
-    weight_i = sqrt(z² + 4(1-z)p_i) - z
-    And normalized to sum to 1.
+    The Shin formula for fair probability is:
+        p_i = (sqrt(z² + 4(1-z)q_i) - z) / (2(1-z))
+    where q_i is the implied probability from odds.
+
+    We find z by solving: sum(p_i) = 1
 
     Args:
         odds: List of decimal odds.
-        tol: Convergence tolerance (unused, kept for API compatibility).
+        tol: Convergence tolerance for Brent's method.
 
     Returns:
         The z parameter (proportion of informed bettors).
 
     Raises:
         InvalidOddsError: If odds are invalid.
+        ConvergenceError: If numerical method fails to converge.
     """
     # Validate odds
     for odd in odds:
         if odd <= 1:
             raise InvalidOddsError(f"All odds must be > 1, got {odd}")
 
-    # Calculate overround
+    # Calculate implied probabilities
     implied = [1.0 / o for o in odds]
     overround = sum(implied) - 1.0
 
-    # In Shin's model, z (proportion of informed bettors) is related to
-    # the market's overround. For typical betting markets:
-    # z ≈ overround for small to moderate overround values
-    # This approximation is standard in the literature and works well
-    # for sports betting applications.
-    # Clamp to reasonable range for numerical stability
-    z = min(max(overround, 0.001), 0.5)
+    # If no overround (fair odds), z = 0
+    if overround <= 0:
+        return 0.0
 
-    return z
+    def shin_prob_sum(z: float) -> float:
+        """Calculate sum of Shin probabilities minus 1.
+
+        Returns 0 when z gives probabilities that sum to 1.
+        """
+        if z <= 0 or z >= 1:
+            return float("inf")
+
+        total = 0.0
+        for q in implied:
+            inner = z**2 + 4 * (1 - z) * q
+            if inner < 0:
+                return float("inf")
+            p = (np.sqrt(inner) - z) / (2 * (1 - z))
+            total += p
+        return total - 1.0
+
+    # Search for z in (0, 1) where probabilities sum to 1
+    # z typically lies between 0 and the overround
+    try:
+        # Use a wider search range to ensure convergence
+        # z should be positive and less than 1
+        z_min = 1e-6
+        z_max = min(0.5, overround + 0.1)  # Reasonable upper bound
+
+        # Check if solution exists in range
+        f_min = shin_prob_sum(z_min)
+        f_max = shin_prob_sum(z_max)
+
+        # If signs are the same, expand search range
+        if f_min * f_max > 0:
+            z_max = 0.99  # Try wider range
+            f_max = shin_prob_sum(z_max)
+
+        if f_min * f_max > 0:
+            # Fallback: use overround approximation when iterative fails
+            return min(max(overround, 0.001), 0.5)
+
+        z = brentq(shin_prob_sum, z_min, z_max, xtol=tol)
+        return float(z)
+    except (ValueError, RuntimeError) as e:
+        raise ConvergenceError(f"Shin method failed to converge: {e}") from e
 
 
 # =============================================================================
