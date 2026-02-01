@@ -295,6 +295,8 @@ class DashboardBuilder:
             "history.html",
             metrics=perf_report,
             charts=charts,
+            date_range={},
+            bet_history=bets or [],
             generated_at=datetime.now().isoformat(),
         )
 
@@ -319,13 +321,16 @@ class DashboardBuilder:
         """
         logger.info("Updating model health data")
 
+        # Ensure output directory exists
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
         # Generate health report
         health_report = self._report_generator.model_health_report(
             drift_results=drift_results,
             recent_metrics=recent_metrics,
         )
 
-        model_info = model_info or {}
+        model_info = model_info or {"version": "v1.0.0"}
 
         # Render model page
         self._render_page(
@@ -405,11 +410,36 @@ class DashboardBuilder:
             logger.warning("Template directory not found, skipping HTML rendering")
             return 0
 
-        pages = ["index.html", "predictions.html", "history.html", "model.html"]
+        # Default context for each page template
+        page_contexts: dict[str, dict[str, Any]] = {
+            "index.html": {
+                "summary": {},
+                "top_signals": [],
+                "prediction_date": date.today().isoformat(),
+                "performance": {},
+                "health": {"status": "healthy"},
+                "model_info": {"version": "v1.0.0"},
+            },
+            "predictions.html": {
+                "predictions": [],
+                "signals": [],
+                "summary": {},
+            },
+            "history.html": {
+                "metrics": {},
+                "charts": {},
+                "date_range": {},
+                "bet_history": [],
+            },
+            "model.html": {
+                "health": {"status": "healthy"},
+                "model_info": {"version": "v1.0.0"},
+            },
+        }
 
-        for page in pages:
+        for page, context in page_contexts.items():
             try:
-                self._render_page(page)
+                self._render_page(page, **context)
                 pages_rendered += 1
             except TemplateNotFound:
                 logger.debug("Template {} not found, skipping", page)

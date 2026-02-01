@@ -283,6 +283,124 @@ async function loadWinRateTrendChart(canvasId, dataUrl) {
 }
 
 /**
+ * Load and render ROI time series chart
+ * @param {string} canvasId - Canvas element ID
+ * @param {string} dataUrl - URL to fetch chart data from
+ */
+async function loadROITimeSeriesChart(canvasId, dataUrl) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+
+    try {
+        const response = await fetch(dataUrl);
+        if (!response.ok) {
+            renderEmptyChart(canvas, 'No ROI time series data available');
+            return;
+        }
+
+        const data = await response.json();
+        const chartData = data.charts?.roi_time_series;
+
+        if (!chartData || !chartData.labels || chartData.labels.length === 0) {
+            renderEmptyChart(canvas, 'No ROI time series data available');
+            return;
+        }
+
+        new Chart(canvas, {
+            type: 'line',
+            data: chartData,
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: false
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return context.parsed.y.toFixed(2) + '% ROI';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: {
+                            display: false
+                        }
+                    },
+                    y: {
+                        beginAtZero: false,
+                        ticks: {
+                            callback: function(value) {
+                                return value.toFixed(1) + '%';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Error loading ROI time series chart:', error);
+        renderEmptyChart(canvas, 'Error loading chart data');
+    }
+}
+
+/**
+ * Load and render bet type pie chart
+ * @param {string} canvasId - Canvas element ID
+ * @param {string} dataUrl - URL to fetch chart data from
+ */
+async function loadBetTypePieChart(canvasId, dataUrl) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+
+    try {
+        const response = await fetch(dataUrl);
+        if (!response.ok) {
+            renderEmptyChart(canvas, 'No bet type data available');
+            return;
+        }
+
+        const data = await response.json();
+        const chartData = data.charts?.bet_type_breakdown;
+
+        if (!chartData || !chartData.labels || chartData.labels.length === 0) {
+            renderEmptyChart(canvas, 'No bet type data available');
+            return;
+        }
+
+        new Chart(canvas, {
+            type: 'pie',
+            data: chartData,
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom'
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                const value = context.parsed;
+                                const percentage = ((value / total) * 100).toFixed(1);
+                                return context.label + ': ' + value + ' (' + percentage + '%)';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Error loading bet type pie chart:', error);
+        renderEmptyChart(canvas, 'Error loading chart data');
+    }
+}
+
+/**
  * Render empty chart placeholder
  * @param {HTMLCanvasElement} canvas - Canvas element
  * @param {string} message - Message to display
@@ -401,11 +519,17 @@ document.addEventListener('DOMContentLoaded', function() {
             case 'roi':
                 loadROIChart(canvas.id, dataUrl);
                 break;
+            case 'roi-time-series':
+                loadROITimeSeriesChart(canvas.id, dataUrl);
+                break;
             case 'calibration':
                 loadCalibrationChart(canvas.id, dataUrl);
                 break;
             case 'winrate':
                 loadWinRateTrendChart(canvas.id, dataUrl);
+                break;
+            case 'bet-type-pie':
+                loadBetTypePieChart(canvas.id, dataUrl);
                 break;
         }
     });
