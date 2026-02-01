@@ -96,7 +96,7 @@ class PlayByPlayCollector(BaseCollector):
             game_id: NBA game ID.
 
         Returns:
-            List of Play model instances.
+            List of Play model instances (deduplicated by event_num).
         """
         self.logger.debug(f"Collecting play-by-play for game {game_id}")
 
@@ -107,12 +107,14 @@ class PlayByPlayCollector(BaseCollector):
                 self.logger.warning(f"No play-by-play data for game {game_id}")
                 return []
 
-            plays = []
+            # Deduplicate plays by event_num (unique key is game_id + event_num)
+            plays_by_event: dict[int, Play] = {}
             for _, row in df.iterrows():
                 play = self._transform_play(row, game_id)
-                if play:
-                    plays.append(play)
+                if play and play.event_num not in plays_by_event:
+                    plays_by_event[play.event_num] = play
 
+            plays = list(plays_by_event.values())
             self.logger.debug(f"Collected {len(plays)} plays for game {game_id}")
             return plays
 
