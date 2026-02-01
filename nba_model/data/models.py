@@ -224,7 +224,7 @@ class Game(Base):
         return f"<Game(game_id={self.game_id!r}, game_date={self.game_date})>"
 
 
-class GameStats(Base, TimestampMixin):
+class GameStats(Base):
     """Team-level game statistics.
 
     Stores both basic and advanced statistics for each team in a game.
@@ -661,7 +661,7 @@ class LineupSpacing(Base, TimestampMixin):
         return f"<LineupSpacing(season_id={self.season_id!r}, lineup_hash={self.lineup_hash[:8]}...)>"
 
 
-class SeasonStats(Base, TimestampMixin):
+class SeasonStats(Base):
     """Season-level statistics for normalization.
 
     Stores mean/std/min/max for various metrics to enable z-score normalization.

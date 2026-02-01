@@ -605,9 +605,19 @@ class DashboardBuilder:
                 break
 
         if source_dir:
+            # Skip if source and destination are the same directory
+            if source_dir.resolve() == dest_dir.resolve():
+                logger.debug("Source and destination are the same, skipping asset copy")
+                return 0
+
             for asset_file in source_dir.iterdir():
                 if asset_file.is_file():
-                    shutil.copy2(asset_file, dest_dir / asset_file.name)
+                    dest_file = dest_dir / asset_file.name
+                    # Skip if source and destination files are the same
+                    if asset_file.resolve() == dest_file.resolve():
+                        logger.debug("Skipping asset (same file): {}", asset_file.name)
+                        continue
+                    shutil.copy2(asset_file, dest_file)
                     assets_copied += 1
                     logger.debug("Copied asset: {}", asset_file.name)
 

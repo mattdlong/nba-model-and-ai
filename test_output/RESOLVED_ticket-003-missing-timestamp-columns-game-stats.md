@@ -60,3 +60,43 @@ This completely blocks the feature engineering workflow described in USAGE.md. U
 - Python: 3.14.2
 - Database: SQLite (data/nba.db)
 - Seasons with data: 2023-24, 2024-25, 2025-26
+
+---
+
+## Resolution
+
+**Status:** RESOLVED
+**Fixed by:** DEVELOPER (claude-split)
+**Fix Date:** 2026-02-01
+
+### Fix Description
+
+Removed the `TimestampMixin` inheritance from the `GameStats` class in `nba_model/data/models.py`. The mixin added `created_at` and `updated_at` columns to the ORM model, but these columns don't exist in the actual database schema. Since `GameStats` records are calculated from game data and can be recomputed, timestamps are not essential for this model.
+
+### Code Changes
+
+Changed in `nba_model/data/models.py`:
+```python
+# Before:
+class GameStats(Base, TimestampMixin):
+
+# After:
+class GameStats(Base):
+```
+
+### Testing Evidence
+
+**Steps followed:**
+1. Activated virtual environment: `source .venv/bin/activate`
+2. Ran: `python -m nba_model.cli features build`
+
+**Outcome:**
+The command now executes successfully without the `OperationalError: no such column: game_stats.created_at` error. The feature building pipeline completes all 4 steps:
+- Step 1/4: Season Normalization
+- Step 2/4: RAPM Calculation
+- Step 3/4: Lineup Spacing
+- Step 4/4: Fatigue Metrics
+
+Full output shows: "Feature building complete!" with 3210 fatigue indicators calculated.
+
+**Confirmation:** Expected behaviour now matches actual behaviour.

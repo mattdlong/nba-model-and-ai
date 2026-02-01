@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NBA Model - Model Health</title>
+    <link rel="stylesheet" href="assets/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="index.html">NBA Model</a>
+        </div>
+        <ul class="nav-links">
+            <li><a href="index.html" class="">Dashboard</a></li>
+            <li><a href="predictions.html" class="">Predictions</a></li>
+            <li><a href="history.html" class="">History</a></li>
+            <li><a href="model.html" class="active">Model</a></li>
+        </ul>
+    </nav>
+
+    <main class="container">
+        
+<div class="page-header">
+    <h1>Model Health</h1>
+    <p class="subtitle">
+        Status:
+        <span class="status-badge status-healthy">
+            HEALTHY
+        </span>
+    </p>
+</div>
+
+<!-- Model Info Section -->
+<section class="section">
+    <h2>Model Information</h2>
+    <div class="model-info-grid">
+        <div class="info-card">
+            <h3>Architecture</h3>
+            <p>Two-Tower Fusion</p>
+            <ul>
+                <li>Transformer Encoder (128-dim)</li>
+                <li>GATv2 GNN (4 heads)</li>
+                <li>Multi-task outputs</li>
+            </ul>
+        </div>
+        <div class="info-card">
+            <h3>Current Version</h3>
+            <p class="version">v1.0.0</p>
+            <p class="training-date">
+                Trained: N/A
+            </p>
+        </div>
+        <div class="info-card">
+            <h3>Training Data</h3>
+            <p>N/A games</p>
+            <p>N/A to N/A</p>
+        </div>
+        <div class="info-card">
+            <h3>Monitoring</h3>
+            <p class="drift-check-time">
+                Last Drift Check: N/A
+            </p>
+            <p class="next-retrain">
+                Next Scheduled Retrain: N/A
+            </p>
+        </div>
+    </div>
+</section>
+
+<!-- Feature Importance Section -->
+<section class="section">
+    <h2>Feature Importance</h2>
+    
+    <p class="no-data">Feature importance data not available</p>
+    
+</section>
+
+<!-- Health Status Section -->
+<section class="section">
+    <h2>Health Status</h2>
+    <div class="health-summary">
+        <div class="health-indicator healthy">
+            <span class="indicator-icon">
+                
+                    <span style="color: #10b981;">&#x2713;</span>
+                
+            </span>
+            <span class="indicator-text">
+                
+                    No Drift Detected
+                
+            </span>
+        </div>
+
+        
+    </div>
+</section>
+
+<!-- Feature Stability Section -->
+<section class="section">
+    <h2>Feature Stability</h2>
+    
+    <p class="no-data">No feature stability data available</p>
+    
+</section>
+
+<!-- Recent Performance Section -->
+<section class="section">
+    <h2>Recent Performance</h2>
+    
+    <p class="no-data">No recent performance data available</p>
+    
+</section>
+
+<!-- Drift Detection Thresholds -->
+<section class="section">
+    <h2>Monitoring Thresholds</h2>
+    <div class="thresholds-grid">
+        <div class="threshold-item">
+            <span class="threshold-name">KS Test P-Value</span>
+            <span class="threshold-value">&lt; 0.05</span>
+            <span class="threshold-desc">Indicates significant distribution shift</span>
+        </div>
+        <div class="threshold-item">
+            <span class="threshold-name">PSI</span>
+            <span class="threshold-value">&gt; 0.2</span>
+            <span class="threshold-desc">Significant population shift</span>
+        </div>
+        <div class="threshold-item">
+            <span class="threshold-name">Accuracy</span>
+            <span class="threshold-value">&lt; 48%</span>
+            <span class="threshold-desc">Below break-even threshold</span>
+        </div>
+        <div class="threshold-item">
+            <span class="threshold-name">Brier Score</span>
+            <span class="threshold-value">&gt; 0.28</span>
+            <span class="threshold-desc">Poor probability calibration</span>
+        </div>
+    </div>
+</section>
+
+    </main>
+
+    <footer class="footer">
+        <p>Generated: 2026-02-01T11:42:23.300960</p>
+        <p>NBA Quantitative Trading Model</p>
+    </footer>
+
+    <script src="assets/charts.js"></script>
+    
+</body>
+</html>

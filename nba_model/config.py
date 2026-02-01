@@ -147,6 +147,14 @@ class Settings(BaseSettings):
         """Return log directory as Path object."""
         return Path(self.log_dir)
 
+    @property
+    def data_dir(self) -> Path:
+        """Return data directory as Path object.
+
+        Derived from the database path's parent directory.
+        """
+        return Path(self.db_path).parent
+
     def ensure_directories(self) -> None:
         """Create required directories if they don't exist."""
         self.db_path_obj.parent.mkdir(parents=True, exist_ok=True)
