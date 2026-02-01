@@ -276,23 +276,187 @@ class NBAApiClient:
         return df
 
     def get_play_by_play(self, game_id: str) -> pd.DataFrame:
-        """Fetch play-by-play using PlayByPlayV2.
+        """Fetch play-by-play using PlayByPlayV2 with V3 fallback.
+
+        Tries PlayByPlayV2 first for compatibility, then falls back to
+        PlayByPlayV3 for historical games where V2 may not work.
+        The V3 response is normalized to V2 column format.
 
         Args:
             game_id: NBA game ID string.
 
         Returns:
-            DataFrame with play events.
+            DataFrame with play events (normalized to V2 format).
         """
-        from nba_api.stats.endpoints import PlayByPlayV2
+        from nba_api.stats.endpoints import PlayByPlayV2, PlayByPlayV3
 
         logger.debug(f"Fetching play-by-play for game {game_id}")
 
-        result = self._request_with_retry(PlayByPlayV2, game_id=game_id)
+        # Try V2 first
+        try:
+            result = self._request_with_retry(PlayByPlayV2, game_id=game_id)
+            df = result.get_data_frames()[0]
+            logger.debug(f"Retrieved {len(df)} play events for game {game_id} (V2)")
+            return df
+        except (KeyError, NBAApiError) as e:
+            # V2 may fail for historical games with KeyError: 'resultSet'
+            # or other API structure issues - fall back to V3
+            logger.warning(
+                f"PlayByPlayV2 failed for game {game_id}: {e}. "
+                f"Falling back to PlayByPlayV3."
+            )
 
-        df = result.get_data_frames()[0]
-        logger.debug(f"Retrieved {len(df)} play events for game {game_id}")
-        return df
+        # Fall back to V3
+        try:
+            result = self._request_with_retry(PlayByPlayV3, game_id=game_id)
+            df = result.get_data_frames()[0]
+            logger.debug(f"Retrieved {len(df)} play events for game {game_id} (V3)")
+
+            # Normalize V3 columns to V2 format
+            df = self._normalize_pbp_v3_to_v2(df, game_id)
+            return df
+        except Exception as e:
+            logger.error(f"PlayByPlayV3 also failed for game {game_id}: {e}")
+            # Return empty DataFrame instead of raising
+            return pd.DataFrame()
+
+    def _normalize_pbp_v3_to_v2(self, df: pd.DataFrame, game_id: str) -> pd.DataFrame:
+        """Normalize PlayByPlayV3 response to V2 column format.
+
+        V3 uses camelCase columns; V2 uses UPPERCASE columns.
+        This ensures downstream collectors work with both versions.
+
+        Args:
+            df: PlayByPlayV3 DataFrame.
+            game_id: Game ID for context.
+
+        Returns:
+            DataFrame with V2-compatible column names.
+        """
+        if df.empty:
+            return df
+
+        # Map V3 action types to V2 event message types
+        action_type_map = {
+            "period": 12,  # PERIOD_START / PERIOD_END
+            "Jump Ball": 10,
+            "2pt": 1,  # Field goal (use shotResult to determine made/missed)
+            "3pt": 1,
+            "Free Throw": 3,
+            "Rebound": 4,
+            "Turnover": 5,
+            "Foul": 6,
+            "Violation": 7,
+            "Substitution": 8,
+            "Timeout": 9,
+            "Ejection": 11,
+            "Instant Replay": 18,
+            "Stoppage": 20,
+        }
+
+        result_df = pd.DataFrame()
+
+        # Map columns
+        result_df["GAME_ID"] = df.get("gameId", game_id)
+        result_df["EVENTNUM"] = df.get("actionNumber", range(len(df)))
+        result_df["PERIOD"] = df.get("period", 1)
+
+        # Parse clock from "PT12M00.00S" to "12:00" format
+        if "clock" in df.columns:
+            result_df["PCTIMESTRING"] = df["clock"].apply(self._parse_v3_clock)
+        else:
+            result_df["PCTIMESTRING"] = None
+
+        result_df["WCTIMESTRING"] = None  # V3 doesn't have wall clock time
+
+        # Map action type to event message type
+        def map_event_type(row: pd.Series) -> int:
+            action_type = row.get("actionType", "")
+            shot_result = row.get("shotResult", "")
+
+            # Check if it's a shot
+            if action_type in ("2pt", "3pt"):
+                if shot_result == "Made":
+                    return 1  # FIELD_GOAL_MADE
+                else:
+                    return 2  # FIELD_GOAL_MISSED
+
+            # Check for period start/end
+            if action_type == "period":
+                sub_type = row.get("subType", "")
+                if sub_type == "end":
+                    return 13  # PERIOD_END
+                return 12  # PERIOD_START
+
+            return action_type_map.get(action_type, 0)
+
+        result_df["EVENTMSGTYPE"] = df.apply(map_event_type, axis=1)
+        result_df["EVENTMSGACTIONTYPE"] = 0  # Default action type
+
+        # Map descriptions based on location (h=home, v=visitor, empty=neutral)
+        def get_home_desc(row: pd.Series) -> str | None:
+            if row.get("location") == "h":
+                return row.get("description")
+            return None
+
+        def get_away_desc(row: pd.Series) -> str | None:
+            if row.get("location") == "v":
+                return row.get("description")
+            return None
+
+        def get_neutral_desc(row: pd.Series) -> str | None:
+            if not row.get("location") or row.get("location") == "":
+                return row.get("description")
+            return None
+
+        result_df["HOMEDESCRIPTION"] = df.apply(get_home_desc, axis=1)
+        result_df["VISITORDESCRIPTION"] = df.apply(get_away_desc, axis=1)
+        result_df["NEUTRALDESCRIPTION"] = df.apply(get_neutral_desc, axis=1)
+
+        # Format score as "AWAY - HOME"
+        def format_score(row: pd.Series) -> str | None:
+            score_home = row.get("scoreHome")
+            score_away = row.get("scoreAway")
+            if score_home and score_away:
+                return f"{score_away} - {score_home}"
+            return None
+
+        result_df["SCORE"] = df.apply(format_score, axis=1)
+
+        # Map player IDs
+        result_df["PLAYER1_ID"] = df.get("personId", 0)
+        result_df["PLAYER2_ID"] = 0  # V3 doesn't have secondary players in same row
+        result_df["PLAYER3_ID"] = 0
+        result_df["PLAYER1_TEAM_ID"] = df.get("teamId", 0)
+
+        logger.debug(f"Normalized {len(result_df)} V3 plays to V2 format")
+        return result_df
+
+    def _parse_v3_clock(self, clock_str: str | None) -> str | None:
+        """Parse V3 clock format (PT12M00.00S) to V2 format (12:00).
+
+        Args:
+            clock_str: Clock string in ISO duration format.
+
+        Returns:
+            Time string in "MM:SS" format or None.
+        """
+        if not clock_str or pd.isna(clock_str):
+            return None
+
+        try:
+            # Parse "PT12M00.00S" format
+            import re
+
+            match = re.match(r"PT(\d+)M([\d.]+)S", str(clock_str))
+            if match:
+                minutes = int(match.group(1))
+                seconds = int(float(match.group(2)))
+                return f"{minutes}:{seconds:02d}"
+        except (ValueError, AttributeError):
+            pass
+
+        return str(clock_str)
 
     def get_shot_chart(
         self,

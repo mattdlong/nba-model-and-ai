@@ -518,3 +518,209 @@ class TestExceptionHierarchy:
                 raise exc
             except NBAApiError:
                 pass  # Should catch
+
+
+class TestPlayByPlayV3Fallback:
+    """Tests for PlayByPlayV2 to V3 fallback mechanism."""
+
+    def test_v2_success_does_not_fallback(self, api_client: NBAApiClient) -> None:
+        """Should not call V3 when V2 succeeds."""
+        mock_v2_result = MagicMock()
+        mock_v2_result.get_data_frames.return_value = [
+            pd.DataFrame({"EVENTNUM": [1, 2], "EVENTMSGTYPE": [12, 1]})
+        ]
+
+        mock_v2_class = MagicMock(return_value=mock_v2_result)
+        mock_v2_class.__name__ = "PlayByPlayV2"
+
+        mock_v3_class = MagicMock()
+        mock_v3_class.__name__ = "PlayByPlayV3"
+
+        with patch.object(api_client, "_apply_rate_limit"):
+            with patch("nba_api.stats.endpoints.PlayByPlayV2", mock_v2_class):
+                with patch("nba_api.stats.endpoints.PlayByPlayV3", mock_v3_class):
+                    df = api_client.get_play_by_play("0022300001")
+
+        assert mock_v2_class.called
+        assert not mock_v3_class.called
+        assert "EVENTNUM" in df.columns
+
+    def test_v2_keyerror_falls_back_to_v3(self, api_client: NBAApiClient) -> None:
+        """Should fall back to V3 when V2 raises KeyError."""
+
+        def v2_fails(*args, **kwargs):
+            raise KeyError("resultSet")
+
+        mock_v2_class = MagicMock(side_effect=v2_fails)
+        mock_v2_class.__name__ = "PlayByPlayV2"
+
+        mock_v3_result = MagicMock()
+        mock_v3_result.get_data_frames.return_value = [
+            pd.DataFrame({
+                "gameId": ["0022300001"],
+                "actionNumber": [1],
+                "clock": ["PT12M00.00S"],
+                "period": [1],
+                "teamId": [1610612738],
+                "personId": [1628369],
+                "description": ["Period Start"],
+                "actionType": ["period"],
+                "subType": ["start"],
+                "scoreHome": ["0"],
+                "scoreAway": ["0"],
+                "location": [""],
+            })
+        ]
+
+        mock_v3_class = MagicMock(return_value=mock_v3_result)
+        mock_v3_class.__name__ = "PlayByPlayV3"
+
+        with patch.object(api_client, "_apply_rate_limit"):
+            with patch("nba_api.stats.endpoints.PlayByPlayV2", mock_v2_class):
+                with patch("nba_api.stats.endpoints.PlayByPlayV3", mock_v3_class):
+                    df = api_client.get_play_by_play("0022300001")
+
+        assert mock_v2_class.called
+        assert mock_v3_class.called
+        # Should have normalized V3 columns to V2 format
+        assert "EVENTNUM" in df.columns
+        assert "PERIOD" in df.columns
+
+    def test_both_fail_returns_empty_dataframe(
+        self, api_client: NBAApiClient
+    ) -> None:
+        """Should return empty DataFrame when both V2 and V3 fail."""
+
+        def v2_fails(*args, **kwargs):
+            raise KeyError("resultSet")
+
+        def v3_fails(*args, **kwargs):
+            raise Exception("V3 also failed")
+
+        mock_v2_class = MagicMock(side_effect=v2_fails)
+        mock_v2_class.__name__ = "PlayByPlayV2"
+
+        mock_v3_class = MagicMock(side_effect=v3_fails)
+        mock_v3_class.__name__ = "PlayByPlayV3"
+
+        with patch.object(api_client, "_apply_rate_limit"):
+            with patch("nba_api.stats.endpoints.PlayByPlayV2", mock_v2_class):
+                with patch("nba_api.stats.endpoints.PlayByPlayV3", mock_v3_class):
+                    df = api_client.get_play_by_play("0022300001")
+
+        assert isinstance(df, pd.DataFrame)
+        assert df.empty
+
+
+class TestV3ClockParsing:
+    """Tests for V3 clock format parsing."""
+
+    def test_parse_standard_clock(self, api_client: NBAApiClient) -> None:
+        """Should parse standard V3 clock format."""
+        assert api_client._parse_v3_clock("PT12M00.00S") == "12:00"
+        assert api_client._parse_v3_clock("PT05M30.50S") == "5:30"
+        assert api_client._parse_v3_clock("PT00M01.00S") == "0:01"
+
+    def test_parse_none_clock(self, api_client: NBAApiClient) -> None:
+        """Should handle None clock value."""
+        assert api_client._parse_v3_clock(None) is None
+
+    def test_parse_empty_clock(self, api_client: NBAApiClient) -> None:
+        """Should handle empty clock value."""
+        import numpy as np
+
+        # Empty string returns None (falsy value check)
+        assert api_client._parse_v3_clock("") is None
+        # NaN returns None
+        assert api_client._parse_v3_clock(np.nan) is None
+
+
+class TestV3ToV2Normalization:
+    """Tests for V3 to V2 column normalization."""
+
+    def test_normalize_empty_dataframe(self, api_client: NBAApiClient) -> None:
+        """Should handle empty DataFrame."""
+        empty_df = pd.DataFrame()
+        result = api_client._normalize_pbp_v3_to_v2(empty_df, "0022300001")
+        assert result.empty
+
+    def test_normalize_maps_event_types(self, api_client: NBAApiClient) -> None:
+        """Should map V3 action types to V2 event message types."""
+        v3_df = pd.DataFrame({
+            "gameId": ["0022300001", "0022300001", "0022300001"],
+            "actionNumber": [1, 2, 3],
+            "clock": ["PT12M00.00S", "PT11M45.00S", "PT11M30.00S"],
+            "period": [1, 1, 1],
+            "teamId": [0, 1610612738, 1610612738],
+            "personId": [0, 1628369, 1628369],
+            "description": ["Period Start", "Tatum 3PT Shot", "Tatum 3PT Shot"],
+            "actionType": ["period", "3pt", "3pt"],
+            "subType": ["start", "", ""],
+            "shotResult": ["", "Made", "Missed"],
+            "scoreHome": ["0", "3", "3"],
+            "scoreAway": ["0", "0", "0"],
+            "location": ["", "h", "h"],
+        })
+
+        result = api_client._normalize_pbp_v3_to_v2(v3_df, "0022300001")
+
+        # Check event type mappings
+        assert result.iloc[0]["EVENTMSGTYPE"] == 12  # Period start
+        assert result.iloc[1]["EVENTMSGTYPE"] == 1  # Field goal made
+        assert result.iloc[2]["EVENTMSGTYPE"] == 2  # Field goal missed
+
+    def test_normalize_maps_descriptions(self, api_client: NBAApiClient) -> None:
+        """Should map descriptions based on location field."""
+        v3_df = pd.DataFrame({
+            "gameId": ["0022300001", "0022300001", "0022300001"],
+            "actionNumber": [1, 2, 3],
+            "clock": ["PT12M00.00S", "PT11M45.00S", "PT11M30.00S"],
+            "period": [1, 1, 1],
+            "teamId": [0, 1610612738, 1610612747],
+            "personId": [0, 1628369, 2544],
+            "description": ["Neutral event", "Home play", "Away play"],
+            "actionType": ["period", "2pt", "2pt"],
+            "subType": ["", "", ""],
+            "shotResult": ["", "Made", "Made"],
+            "scoreHome": ["0", "2", "2"],
+            "scoreAway": ["0", "0", "2"],
+            "location": ["", "h", "v"],
+        })
+
+        result = api_client._normalize_pbp_v3_to_v2(v3_df, "0022300001")
+
+        # Neutral (empty location)
+        assert result.iloc[0]["NEUTRALDESCRIPTION"] == "Neutral event"
+        assert pd.isna(result.iloc[0]["HOMEDESCRIPTION"])
+        assert pd.isna(result.iloc[0]["VISITORDESCRIPTION"])
+
+        # Home
+        assert result.iloc[1]["HOMEDESCRIPTION"] == "Home play"
+        assert pd.isna(result.iloc[1]["NEUTRALDESCRIPTION"])
+
+        # Away
+        assert result.iloc[2]["VISITORDESCRIPTION"] == "Away play"
+        assert pd.isna(result.iloc[2]["HOMEDESCRIPTION"])
+
+    def test_normalize_formats_score(self, api_client: NBAApiClient) -> None:
+        """Should format score as 'AWAY - HOME' string."""
+        v3_df = pd.DataFrame({
+            "gameId": ["0022300001"],
+            "actionNumber": [1],
+            "clock": ["PT10M00.00S"],
+            "period": [2],
+            "teamId": [1610612738],
+            "personId": [1628369],
+            "description": ["Score play"],
+            "actionType": ["2pt"],
+            "subType": [""],
+            "shotResult": ["Made"],
+            "scoreHome": ["55"],
+            "scoreAway": ["48"],
+            "location": ["h"],
+        })
+
+        result = api_client._normalize_pbp_v3_to_v2(v3_df, "0022300001")
+
+        # Score format is "AWAY - HOME"
+        assert result.iloc[0]["SCORE"] == "48 - 55"
