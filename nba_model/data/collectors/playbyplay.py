@@ -252,6 +252,23 @@ class PlayByPlayCollector(BaseCollector):
 
         return None, None
 
+    def _is_team_id(self, id_value: int | None) -> bool:
+        """Check if an ID is a team ID rather than a player ID.
+
+        NBA team IDs are in the range 1610612737-1610612766 (30 teams).
+        Player IDs are outside this range.
+
+        Args:
+            id_value: ID to check.
+
+        Returns:
+            True if this is a team ID, False otherwise.
+        """
+        if id_value is None:
+            return False
+        # NBA team IDs range from 1610612737 (ATL) to 1610612766 (WAS)
+        return 1610612737 <= id_value <= 1610612766
+
     def _extract_player_ids(
         self,
         row: pd.Series,
@@ -261,6 +278,8 @@ class PlayByPlayCollector(BaseCollector):
 
         First tries to get player IDs from the explicit PLAYER_ID fields.
         Falls back to extracting from event descriptions if not present.
+        Filters out team IDs that are sometimes placed in player ID fields
+        (e.g., for team rebounds).
 
         Args:
             row: DataFrame row.
@@ -272,6 +291,15 @@ class PlayByPlayCollector(BaseCollector):
         player1_id = self._safe_int(row.get("PLAYER1_ID"))
         player2_id = self._safe_int(row.get("PLAYER2_ID"))
         player3_id = self._safe_int(row.get("PLAYER3_ID"))
+
+        # Filter out team IDs - these are incorrectly placed in player fields
+        # for events like team rebounds
+        if self._is_team_id(player1_id):
+            player1_id = None
+        if self._is_team_id(player2_id):
+            player2_id = None
+        if self._is_team_id(player3_id):
+            player3_id = None
 
         # Fallback to description parsing when explicit IDs are missing
         if player_name_to_id and player1_id is None:
