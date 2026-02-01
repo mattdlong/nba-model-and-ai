@@ -18,6 +18,7 @@ Status Tags:
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,32 @@ FAIL = "\033[91m[FAIL]\033[0m"        # Red
 WARN = "\033[93m[WARN]\033[0m"        # Yellow
 
 
+class InterceptHandler(logging.Handler):
+    """Handler to intercept stdlib logging and redirect to loguru.
+
+    This ensures that all logging (both loguru and stdlib) goes through
+    loguru's formatting and output handlers.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Emit a log record by forwarding to loguru."""
+        # Get corresponding loguru level if it exists
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+
+        # Find caller from where originated the logged message
+        frame, depth = sys._getframe(6), 6
+        while frame and frame.f_code.co_filename == logging.__file__:
+            frame = frame.f_back
+            depth += 1
+
+        logger.opt(depth=depth, exception=record.exc_info).log(
+            level, record.getMessage()
+        )
+
+
 def setup_logging(
     level: str = "INFO",
     log_dir: str = "logs",
@@ -42,6 +69,7 @@ def setup_logging(
 
     Sets up Loguru with console output and rotating file handlers.
     File logs are written in JSON format for easy parsing.
+    Also intercepts stdlib logging to route through loguru.
 
     Args:
         level: Minimum log level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
@@ -87,6 +115,10 @@ def setup_logging(
         serialize=serialize,
         enqueue=True,  # Thread-safe
     )
+
+    # Intercept stdlib logging and route to loguru
+    # This ensures all logging (both loguru and stdlib) uses the same output
+    logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
 
 
 def get_logger(name: str) -> Any:

@@ -373,7 +373,8 @@ class PlayersCollector(BaseCollector):
         )
 
         all_players: dict[int, Player] = {}  # Dedup by player_id
-        all_player_seasons: list[PlayerSeason] = []
+        # Dedup player_seasons by (player_id, season_id, team_id)
+        all_player_seasons: dict[tuple[int, str, int], PlayerSeason] = {}
 
         for i, team_id in enumerate(team_ids, 1):
             self._log_progress(i, len(team_ids), f"team {team_id}")
@@ -390,12 +391,14 @@ class PlayersCollector(BaseCollector):
                         if player:
                             all_players[player_id] = player
 
-                    # Always add player_season (tracks team changes)
+                    # Add player_season, deduplicating by unique key
                     player_season = self._transform_player_season(
                         row, season, team_id
                     )
                     if player_season:
-                        all_player_seasons.append(player_season)
+                        key = (player_id, season, team_id)
+                        if key not in all_player_seasons:
+                            all_player_seasons[key] = player_season
 
             except Exception as e:
                 self.logger.error(f"Error collecting roster for team {team_id}: {e}")
@@ -406,7 +409,7 @@ class PlayersCollector(BaseCollector):
             f"{len(all_player_seasons)} player-seasons"
         )
 
-        return list(all_players.values()), all_player_seasons
+        return list(all_players.values()), list(all_player_seasons.values())
 
     def collect_player_details(self, player_id: int) -> Player | None:
         """Collect detailed info for a single player.

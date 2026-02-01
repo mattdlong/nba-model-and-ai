@@ -191,22 +191,22 @@ class ShotsCollector(BaseCollector):
             Shot model instance or None.
         """
         try:
-            # Required fields
+            # Required fields - use _safe_int to handle NaN values
             game_id = str(row.get("GAME_ID", ""))
-            player_id = int(row.get("PLAYER_ID", 0))
-            team_id = int(row.get("TEAM_ID", 0))
+            player_id = self._safe_int(row.get("PLAYER_ID"))
+            team_id = self._safe_int(row.get("TEAM_ID"))
 
             if not game_id or not player_id or not team_id:
                 return None
 
-            # Period and time
-            period = int(row.get("PERIOD", 1))
-            minutes_remaining = int(row.get("MINUTES_REMAINING", 0))
-            seconds_remaining = int(row.get("SECONDS_REMAINING", 0))
+            # Period and time - use _safe_int with defaults
+            period = self._safe_int(row.get("PERIOD")) or 1
+            minutes_remaining = self._safe_int(row.get("MINUTES_REMAINING")) or 0
+            seconds_remaining = self._safe_int(row.get("SECONDS_REMAINING")) or 0
 
-            # Coordinates (required)
-            loc_x = int(row.get("LOC_X", 0))
-            loc_y = int(row.get("LOC_Y", 0))
+            # Coordinates (required) - use _safe_int with defaults
+            loc_x = self._safe_int(row.get("LOC_X")) or 0
+            loc_y = self._safe_int(row.get("LOC_Y")) or 0
 
             # Shot outcome
             shot_made_flag = row.get("SHOT_MADE_FLAG", 0)
