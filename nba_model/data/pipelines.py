@@ -646,6 +646,76 @@ class CollectionPipeline:
             player_game_stats=batch.player_game_stats,
         )
 
+    def _ensure_players_exist(self, batch: BatchResult) -> int:
+        """Create stub records for any missing players referenced in the batch.
+
+        Players can appear in plays/shots/stints without being in rosters
+        (mid-season signings, 10-day contracts, etc.). This creates minimal
+        Player records to satisfy foreign key constraints.
+
+        Args:
+            batch: BatchResult containing plays, shots, stints.
+
+        Returns:
+            Number of stub players created.
+        """
+        from nba_model.data.models import Player
+
+        # Collect all player IDs from the batch
+        player_ids: set[int] = set()
+
+        for play in batch.plays:
+            if play.player1_id:
+                player_ids.add(play.player1_id)
+            if play.player2_id:
+                player_ids.add(play.player2_id)
+            if play.player3_id:
+                player_ids.add(play.player3_id)
+
+        for shot in batch.shots:
+            if shot.player_id:
+                player_ids.add(shot.player_id)
+
+        for pgs in batch.player_game_stats:
+            if pgs.player_id:
+                player_ids.add(pgs.player_id)
+
+        for stint in batch.stints:
+            # Stint has player1_id through player5_id for each team
+            for i in range(1, 6):
+                for prefix in ["home", "away"]:
+                    pid = getattr(stint, f"{prefix}_player{i}_id", None)
+                    if pid:
+                        player_ids.add(pid)
+
+        if not player_ids:
+            return 0
+
+        # Find which players don't exist
+        existing_ids = set(
+            row[0]
+            for row in self.session.query(Player.player_id)
+            .filter(Player.player_id.in_(player_ids))
+            .all()
+        )
+
+        missing_ids = player_ids - existing_ids
+
+        if not missing_ids:
+            return 0
+
+        # Create stub records for missing players
+        for player_id in missing_ids:
+            stub = Player(
+                player_id=player_id,
+                full_name=f"Unknown Player {player_id}",
+            )
+            self.session.merge(stub)
+
+        self.session.flush()
+        self.logger.debug(f"Created {len(missing_ids)} stub player records")
+        return len(missing_ids)
+
     def _commit_batch(self, batch: BatchResult) -> bool:
         """Commit batch to database.
 
@@ -656,6 +726,9 @@ class CollectionPipeline:
             True if commit succeeded, False otherwise.
         """
         try:
+            # Ensure all referenced players exist (create stubs if needed)
+            self._ensure_players_exist(batch)
+
             # Add plays
             for play in batch.plays:
                 self.session.merge(play)
@@ -693,8 +766,6 @@ class CollectionPipeline:
             )
             self.session.rollback()
             return False
-            self.session.rollback()
-            raise
 
     def _get_current_season(self) -> str:
         """Determine current NBA season.
