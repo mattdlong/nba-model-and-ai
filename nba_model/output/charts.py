@@ -370,6 +370,126 @@ class ChartGenerator:
             ],
         }
 
+    def roi_time_series_chart(
+        self,
+        bets: list[Bet],
+    ) -> dict[str, Any]:
+        """Generate cumulative ROI time series chart.
+
+        Shows cumulative ROI progression over time.
+
+        Args:
+            bets: List of Bet objects sorted by timestamp.
+
+        Returns:
+            Dictionary with Chart.js-compatible line chart structure.
+        """
+        if not bets:
+            return self._empty_line_chart()
+
+        logger.debug("Generating ROI time series chart with {} bets", len(bets))
+
+        # Sort bets by timestamp
+        sorted_bets = sorted(bets, key=lambda b: b.timestamp)
+
+        # Calculate cumulative ROI
+        cumulative_wagered = 0.0
+        cumulative_profit = 0.0
+        labels = []
+        roi_values = []
+
+        for bet in sorted_bets:
+            cumulative_wagered += bet.bet_amount
+            cumulative_profit += bet.profit or 0.0
+            roi = (cumulative_profit / cumulative_wagered * 100) if cumulative_wagered > 0 else 0.0
+            labels.append(bet.timestamp.strftime("%Y-%m-%d"))
+            roi_values.append(round(roi, 2))
+
+        # Determine color based on final ROI
+        final_roi = roi_values[-1] if roi_values else 0
+        color = CHART_COLORS["secondary"] if final_roi >= 0 else CHART_COLORS["danger"]
+
+        return {
+            "labels": labels,
+            "datasets": [
+                {
+                    "label": "Cumulative ROI %",
+                    "data": roi_values,
+                    "borderColor": color,
+                    "backgroundColor": color.replace("rgb", "rgba").replace(")", ", 0.1)"),
+                    "fill": True,
+                    "tension": 0.1,
+                }
+            ],
+        }
+
+    def bet_type_breakdown_chart(
+        self,
+        bets: list[Bet],
+    ) -> dict[str, Any]:
+        """Generate bet type breakdown pie chart.
+
+        Shows distribution of bets by bet type.
+
+        Args:
+            bets: List of Bet objects.
+
+        Returns:
+            Dictionary with Chart.js-compatible pie chart structure.
+        """
+        if not bets:
+            return self._empty_pie_chart()
+
+        logger.debug("Generating bet type breakdown chart with {} bets", len(bets))
+
+        # Count bets by type
+        type_counts: dict[str, int] = defaultdict(int)
+        for bet in bets:
+            type_counts[bet.bet_type] += 1
+
+        # Sort by count descending
+        sorted_types = sorted(type_counts.items(), key=lambda x: x[1], reverse=True)
+        labels = [t[0].title() for t in sorted_types]
+        counts = [t[1] for t in sorted_types]
+
+        # Color palette for pie chart
+        colors = [
+            CHART_COLORS["primary"],
+            CHART_COLORS["secondary"],
+            CHART_COLORS["warning"],
+            CHART_COLORS["danger"],
+            CHART_COLORS["neutral"],
+        ]
+        # Extend colors if needed
+        while len(colors) < len(labels):
+            colors.append(CHART_COLORS["neutral"])
+
+        return {
+            "labels": labels,
+            "datasets": [
+                {
+                    "data": counts,
+                    "backgroundColor": colors[:len(labels)],
+                }
+            ],
+        }
+
+    def _empty_pie_chart(self) -> dict[str, Any]:
+        """Return empty pie chart structure.
+
+        Returns:
+            Empty Chart.js pie chart data.
+        """
+        return {
+            "labels": [],
+            "datasets": [
+                {
+                    "data": [],
+                    "backgroundColor": [],
+                }
+            ],
+        }
+
     def _calculate_calibration_bins(
         self,
         predictions: list[float],

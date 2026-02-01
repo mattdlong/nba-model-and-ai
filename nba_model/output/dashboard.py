@@ -273,13 +273,28 @@ class DashboardBuilder:
         )
 
         # Generate chart data
-        charts = {}
+        charts: dict[str, Any] = {}
         if bankroll_history:
             charts["bankroll"] = self._chart_generator.bankroll_chart(bankroll_history)
 
         if bets:
             charts["roi_by_month"] = self._chart_generator.roi_by_month_chart(bets)
             charts["win_rate_trend"] = self._chart_generator.win_rate_trend_chart(bets)
+            charts["roi_time_series"] = self._chart_generator.roi_time_series_chart(bets)
+            charts["bet_type_breakdown"] = self._chart_generator.bet_type_breakdown_chart(
+                bets
+            )
+
+            # Generate calibration chart from bet predictions vs results
+            predictions = [b.model_prob for b in bets if b.result is not None]
+            actuals = [1 if b.result == "win" else 0 for b in bets if b.result is not None]
+            if predictions and actuals:
+                charts["calibration"] = self._chart_generator.calibration_chart(
+                    predictions, actuals
+                )
+
+        # Transform Bet objects into dicts for the template
+        bet_history = self._format_bet_history(bets or [])
 
         # Write JSON
         api_dir = self.output_dir / "api"
@@ -296,9 +311,42 @@ class DashboardBuilder:
             metrics=perf_report,
             charts=charts,
             date_range={},
-            bet_history=bets or [],
+            bet_history=bet_history,
             generated_at=datetime.now().isoformat(),
         )
+
+    def _format_bet_history(self, bets: list[Bet]) -> list[dict[str, Any]]:
+        """Transform Bet objects into dicts for the history template.
+
+        Args:
+            bets: List of Bet objects.
+
+        Returns:
+            List of dicts with fields: date, matchup, bet_type, side,
+            odds, stake_pct, result, profit_pct.
+        """
+        formatted = []
+        for bet in bets:
+            # Calculate stake_pct (Kelly fraction as percentage of bankroll)
+            stake_pct = bet.kelly_fraction
+
+            # Calculate profit_pct (profit as percentage of bet amount)
+            profit_pct = 0.0
+            if bet.bet_amount > 0 and bet.profit is not None:
+                profit_pct = bet.profit / bet.bet_amount
+
+            formatted.append({
+                "date": bet.timestamp.strftime("%Y-%m-%d"),
+                "matchup": f"Game {bet.game_id}",  # Game ID as matchup placeholder
+                "bet_type": bet.bet_type,
+                "side": bet.side,
+                "odds": bet.market_odds,
+                "stake_pct": stake_pct,
+                "result": bet.result or "pending",
+                "profit_pct": profit_pct,
+            })
+
+        return formatted
 
     def update_model_health(
         self,
@@ -331,6 +379,18 @@ class DashboardBuilder:
         )
 
         model_info = model_info or {"version": "v1.0.0"}
+
+        # Write health.json for use by other pages (index.html reads this)
+        api_dir = self.output_dir / "api"
+        api_dir.mkdir(parents=True, exist_ok=True)
+        self._write_json(
+            api_dir / "health.json",
+            {
+                "health": health_report,
+                "model_info": model_info,
+                "generated_at": datetime.now().isoformat(),
+            },
+        )
 
         # Render model page
         self._render_page(
@@ -479,7 +539,7 @@ class DashboardBuilder:
         top_signals = daily_report.get("signals", [])[:3]
 
         # Load performance data from API file if available
-        performance = {}
+        performance: dict[str, Any] = {}
         perf_file = self.output_dir / "api" / "performance.json"
         if perf_file.exists():
             try:
@@ -494,11 +554,19 @@ class DashboardBuilder:
             except (json.JSONDecodeError, OSError):
                 logger.debug("Could not load performance data for index page")
 
-        # Default health status (will be updated by update_model_health)
-        health = {"status": "healthy"}
-
-        # Default model info (will be updated by update_model_health)
-        model_info = {"version": "v1.0.0"}
+        # Load health and model info from API file if available
+        health: dict[str, Any] = {"status": "healthy"}
+        model_info: dict[str, Any] = {"version": "v1.0.0"}
+        health_file = self.output_dir / "api" / "health.json"
+        if health_file.exists():
+            try:
+                health_data = json.loads(health_file.read_text(encoding="utf-8"))
+                if "health" in health_data:
+                    health = health_data["health"]
+                if "model_info" in health_data:
+                    model_info = health_data["model_info"]
+            except (json.JSONDecodeError, OSError):
+                logger.debug("Could not load health data for index page")
 
         self._render_page(
             "index.html",

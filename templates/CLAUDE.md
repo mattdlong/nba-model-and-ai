@@ -34,13 +34,20 @@ Variables passed by `DashboardBuilder` to each template:
 - `predictions` - List of game prediction dicts
 - `signals` - List of betting signal dicts
 - `summary` - Summary statistics dict
-- `injuries` - Dict of team -> player injury list (optional)
 
 ### history.html
 - `metrics` - Performance metrics dict (period, roi, accuracy, clv, etc.)
 - `charts` - Pre-computed chart data dicts
 - `date_range` - Dict with start/end dates (optional)
-- `bet_history` - List of historical bet dicts (optional)
+- `bet_history` - List of formatted bet dicts with fields:
+  - `date` - Date string (YYYY-MM-DD)
+  - `matchup` - Game matchup string
+  - `bet_type` - Type of bet (spread, moneyline, total)
+  - `side` - Bet side (home, away, over, under)
+  - `odds` - Market odds
+  - `stake_pct` - Stake as percentage of bankroll
+  - `result` - Bet result (win, loss, push, pending)
+  - `profit_pct` - Profit as percentage of stake
 
 ### model.html
 - `health` - Health status dict (status, drift_detected, features_drifted, etc.)
