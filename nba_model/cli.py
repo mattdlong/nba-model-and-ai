@@ -3017,11 +3017,22 @@ def predict_today(
         )
         raise typer.Exit(1)
 
+    # Check if models are trained
+    registry = ModelRegistry()
+    if registry.get_latest_version() is None:
+        console.print(
+            "[red]Error: No trained models found.[/red]\n"
+            "[yellow]To train a model, run:[/yellow]\n"
+            "  1. python -m nba_model.cli data collect --seasons 2023-24\n"
+            "  2. python -m nba_model.cli features build\n"
+            "  3. python -m nba_model.cli train all"
+        )
+        raise typer.Exit(1)
+
     init_db()
 
     with session_scope() as session:
         try:
-            registry = ModelRegistry()
             pipeline = InferencePipeline(
                 model_registry=registry,
                 db_session=session,
@@ -3092,11 +3103,22 @@ def predict_game(
         )
         raise typer.Exit(1)
 
+    # Check if models are trained
+    registry = ModelRegistry()
+    if registry.get_latest_version() is None:
+        console.print(
+            "[red]Error: No trained models found.[/red]\n"
+            "[yellow]To train a model, run:[/yellow]\n"
+            "  1. python -m nba_model.cli data collect --seasons 2023-24\n"
+            "  2. python -m nba_model.cli features build\n"
+            "  3. python -m nba_model.cli train all"
+        )
+        raise typer.Exit(1)
+
     init_db()
 
     with session_scope() as session:
         try:
-            registry = ModelRegistry()
             pipeline = InferencePipeline(
                 model_registry=registry,
                 db_session=session,
@@ -3169,12 +3191,23 @@ def predict_signals(
         )
         raise typer.Exit(1)
 
+    # Check if models are trained
+    registry = ModelRegistry()
+    if registry.get_latest_version() is None:
+        console.print(
+            "[red]Error: No trained models found.[/red]\n"
+            "[yellow]To train a model, run:[/yellow]\n"
+            "  1. python -m nba_model.cli data collect --seasons 2023-24\n"
+            "  2. python -m nba_model.cli features build\n"
+            "  3. python -m nba_model.cli train all"
+        )
+        raise typer.Exit(1)
+
     init_db()
 
     with session_scope() as session:
         try:
             # Generate predictions
-            registry = ModelRegistry()
             pipeline = InferencePipeline(
                 model_registry=registry,
                 db_session=session,
@@ -3261,11 +3294,22 @@ def predict_date(
         )
         raise typer.Exit(1)
 
+    # Check if models are trained
+    registry = ModelRegistry()
+    if registry.get_latest_version() is None:
+        console.print(
+            "[red]Error: No trained models found.[/red]\n"
+            "[yellow]To train a model, run:[/yellow]\n"
+            "  1. python -m nba_model.cli data collect --seasons 2023-24\n"
+            "  2. python -m nba_model.cli features build\n"
+            "  3. python -m nba_model.cli train all"
+        )
+        raise typer.Exit(1)
+
     init_db()
 
     with session_scope() as session:
         try:
-            registry = ModelRegistry()
             pipeline = InferencePipeline(
                 model_registry=registry,
                 db_session=session,

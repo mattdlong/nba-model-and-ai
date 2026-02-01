@@ -106,6 +106,38 @@ pip install -e ".[dev]"
 python -m nba_model.cli data collect --seasons 2023-24
 ```
 
+### Platform-Specific Notes
+
+#### Apple Silicon (M1/M2/M3 Macs)
+
+If you encounter installation issues with `torch-geometric`, try these alternatives:
+
+**Option 1: Install PyTorch first, then torch-geometric**
+```bash
+# Install PyTorch first
+pip install torch
+
+# Then install torch-geometric with specific wheels
+pip install torch-geometric -f https://data.pyg.org/whl/torch-2.2.0+cpu.html
+```
+
+**Option 2: Use Conda (Recommended for Apple Silicon)**
+```bash
+# Create a Conda environment
+conda create -n nba-model python=3.11
+conda activate nba-model
+
+# Install PyTorch via Conda (better ARM64 support)
+conda install pytorch -c pytorch
+
+# Install remaining dependencies
+pip install -e ".[dev]"
+```
+
+**Option 3: Skip torch-geometric (limited functionality)**
+
+If you cannot install torch-geometric, the system will work but GNN-based lineup analysis will be disabled. The Transformer and statistical features will still function.
+
 ### Verify It's Working
 
 ```bash

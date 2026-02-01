@@ -113,6 +113,27 @@ pip install -e ".[dev]"
 **Root Cause:**
 This error occurs due to OpenMP shared memory conflicts between different libraries (PyTorch, NumPy, SciPy) on macOS. Setting `OMP_NUM_THREADS=1` disables OpenMP parallelism, avoiding the conflict.
 
+### torch-geometric Installation on Apple Silicon
+
+If `pip install -e ".[dev]"` fails when installing torch-geometric on M1/M2/M3 Macs:
+
+**Option 1: Install with specific wheel index**
+```bash
+pip install torch-geometric -f https://data.pyg.org/whl/torch-2.2.0+cpu.html
+```
+
+**Option 2: Use Conda (recommended)**
+```bash
+conda create -n nba-model python=3.11
+conda activate nba-model
+conda install pytorch -c pytorch
+conda install pyg -c pyg
+pip install -e ".[dev]"
+```
+
+**Option 3: Skip torch-geometric**
+If installation fails, the system will work with limited functionality (GNN-based lineup analysis disabled).
+
 ## Anti-Patterns
 
 - ❌ Never import from `tests/` in production code
