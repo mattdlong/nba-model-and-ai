@@ -580,6 +580,10 @@ class CollectionPipeline:
                     )
                     batch.game_stats.extend(game_stats_list)
                     batch.player_game_stats.extend(game_player_stats)
+
+                    # Warn if no player stats returned (API may have returned empty)
+                    if not game_player_stats and game_plays:
+                        warnings.append("boxscores: no player stats returned")
                 except Exception as e:
                     warnings.append(f"boxscores: {e}")
 

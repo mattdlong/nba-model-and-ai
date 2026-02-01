@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime
 from typing import Any
 
 import pandas as pd
@@ -115,6 +116,24 @@ class NBAApiClient:
             time.sleep(sleep_time)
         self._last_request_time = time.time()
 
+    def _calculate_backoff(self, attempt: int) -> float:
+        """Calculate backoff delay for retry attempts.
+
+        Uses a fixed sequence designed for NBA API recovery:
+        Attempt 0 → 10s, Attempt 1 → 30s, Attempt 2 → 120s,
+        Attempt 3 → 300s (5m), Attempt 4+ → 600s (10m)
+
+        Args:
+            attempt: Current attempt number (0-indexed).
+
+        Returns:
+            Backoff delay in seconds.
+        """
+        backoff_sequence = [10.0, 30.0, 120.0, 300.0, 600.0]
+        if attempt < len(backoff_sequence):
+            return backoff_sequence[attempt]
+        return backoff_sequence[-1]  # 10 minutes for any additional attempts
+
     def _request_with_retry(
         self,
         endpoint_class: type,
@@ -155,15 +174,21 @@ class NBAApiClient:
             except ReadTimeout as e:
                 last_error = e
                 last_was_rate_limit = False
-                logger.warning(
-                    f"Request timeout for {endpoint_class.__name__} "
-                    f"(attempt {attempt + 1})"
-                )
                 if attempt < self.max_retries:
-                    backoff = 2**attempt
-                    logger.debug(f"Retrying in {backoff}s...")
+                    backoff = self._calculate_backoff(attempt)
+                    logger.warning(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] Request timeout for "
+                        f"{endpoint_class.__name__} (attempt {attempt + 1}/{self.max_retries + 1}). "
+                        f"Retrying in {backoff:.0f}s..."
+                    )
                     time.sleep(backoff)
                     continue
+                else:
+                    logger.warning(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] Request timeout for "
+                        f"{endpoint_class.__name__} (attempt {attempt + 1}/{self.max_retries + 1}). "
+                        f"No retries remaining."
+                    )
 
             except RequestException as e:
                 last_error = e
@@ -187,33 +212,55 @@ class NBAApiClient:
 
                 if status_code == 429:
                     last_was_rate_limit = True
-                    logger.warning(
-                        f"Rate limit hit for {endpoint_class.__name__} "
-                        f"(attempt {attempt + 1})"
-                    )
                     if attempt < self.max_retries:
-                        backoff = 2 ** (attempt + 1)  # Longer backoff for rate limits
-                        logger.debug(f"Retrying in {backoff}s...")
+                        backoff = self._calculate_backoff(attempt)
+                        logger.warning(
+                            f"[{datetime.now().strftime('%H:%M:%S')}] Rate limit hit for "
+                            f"{endpoint_class.__name__} (attempt {attempt + 1}/{self.max_retries + 1}). "
+                            f"Retrying in {backoff:.0f}s..."
+                        )
                         time.sleep(backoff)
                         continue
+                    else:
+                        logger.warning(
+                            f"[{datetime.now().strftime('%H:%M:%S')}] Rate limit hit for "
+                            f"{endpoint_class.__name__} (attempt {attempt + 1}/{self.max_retries + 1}). "
+                            f"No retries remaining."
+                        )
 
                 if status_code in RETRIABLE_STATUS_CODES:
-                    logger.warning(
-                        f"Retriable error {status_code} for {endpoint_class.__name__} "
-                        f"(attempt {attempt + 1})"
-                    )
                     if attempt < self.max_retries:
-                        backoff = 2**attempt
-                        logger.debug(f"Retrying in {backoff}s...")
+                        backoff = self._calculate_backoff(attempt)
+                        logger.warning(
+                            f"[{datetime.now().strftime('%H:%M:%S')}] Retriable error {status_code} for "
+                            f"{endpoint_class.__name__} (attempt {attempt + 1}/{self.max_retries + 1}). "
+                            f"Retrying in {backoff:.0f}s..."
+                        )
                         time.sleep(backoff)
                         continue
+                    else:
+                        logger.warning(
+                            f"[{datetime.now().strftime('%H:%M:%S')}] Retriable error {status_code} for "
+                            f"{endpoint_class.__name__} (attempt {attempt + 1}/{self.max_retries + 1}). "
+                            f"No retries remaining."
+                        )
 
                 # Unknown error
-                logger.error(f"Request error for {endpoint_class.__name__}: {e}")
                 if attempt < self.max_retries:
-                    backoff = 2**attempt
+                    backoff = self._calculate_backoff(attempt)
+                    logger.warning(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] Request error for "
+                        f"{endpoint_class.__name__} (attempt {attempt + 1}/{self.max_retries + 1}): {e}. "
+                        f"Retrying in {backoff:.0f}s..."
+                    )
                     time.sleep(backoff)
                     continue
+                else:
+                    logger.error(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] Request error for "
+                        f"{endpoint_class.__name__} (attempt {attempt + 1}/{self.max_retries + 1}): {e}. "
+                        f"No retries remaining."
+                    )
 
             except KeyError as e:
                 # KeyError indicates API structure incompatibility, not transient error
@@ -227,11 +274,21 @@ class NBAApiClient:
             except Exception as e:
                 last_error = e
                 last_was_rate_limit = False
-                logger.error(f"Unexpected error for {endpoint_class.__name__}: {e}")
                 if attempt < self.max_retries:
-                    backoff = 2**attempt
+                    backoff = self._calculate_backoff(attempt)
+                    logger.warning(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] Unexpected error for "
+                        f"{endpoint_class.__name__} (attempt {attempt + 1}/{self.max_retries + 1}): {e}. "
+                        f"Retrying in {backoff:.0f}s..."
+                    )
                     time.sleep(backoff)
                     continue
+                else:
+                    logger.error(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] Unexpected error for "
+                        f"{endpoint_class.__name__} (attempt {attempt + 1}/{self.max_retries + 1}): {e}. "
+                        f"No retries remaining."
+                    )
 
         # All retries exhausted
         if isinstance(last_error, ReadTimeout):
@@ -430,11 +487,49 @@ class NBAApiClient:
 
         result_df["SCORE"] = df.apply(format_score, axis=1)
 
-        # Map player IDs
-        result_df["PLAYER1_ID"] = df.get("personId", 0)
+        # Map player IDs - validate they look like real player IDs
+        # NBA player IDs are typically 5-7 digit numbers (1000 - 2100000 range)
+        # Team IDs are 10 digits (1610612XXX), filter those out
+        # Event types without players: period (12/13), instant replay (18), stoppage (20)
+        def get_valid_player_id(row: pd.Series) -> int:
+            person_id = row.get("personId")
+            event_type = result_df.loc[row.name, "EVENTMSGTYPE"] if row.name in result_df.index else 0
+
+            # Events that don't have players
+            if event_type in (12, 13, 18, 20):
+                return 0
+
+            # Validate player ID range
+            if person_id is None or pd.isna(person_id):
+                return 0
+            try:
+                pid = int(person_id)
+                # Valid player IDs: 1000 - 3000000 (excludes team IDs which are 1610612XXX)
+                if 1000 <= pid <= 3000000:
+                    return pid
+                return 0
+            except (ValueError, TypeError):
+                return 0
+
+        result_df["PLAYER1_ID"] = df.apply(get_valid_player_id, axis=1)
         result_df["PLAYER2_ID"] = 0  # V3 doesn't have secondary players in same row
         result_df["PLAYER3_ID"] = 0
-        result_df["PLAYER1_TEAM_ID"] = df.get("teamId", 0)
+
+        # Validate team ID similarly
+        def get_valid_team_id(row: pd.Series) -> int:
+            team_id = row.get("teamId")
+            if team_id is None or pd.isna(team_id):
+                return 0
+            try:
+                tid = int(team_id)
+                # Valid team IDs are 1610612XXX (10 digits starting with 1610612)
+                if 1610612700 <= tid <= 1610612800:
+                    return tid
+                return 0
+            except (ValueError, TypeError):
+                return 0
+
+        result_df["PLAYER1_TEAM_ID"] = df.apply(get_valid_team_id, axis=1)
 
         logger.debug(f"Normalized {len(result_df)} V3 plays to V2 format")
         return result_df
