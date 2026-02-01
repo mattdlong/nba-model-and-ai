@@ -215,6 +215,15 @@ class NBAApiClient:
                     time.sleep(backoff)
                     continue
 
+            except KeyError as e:
+                # KeyError indicates API structure incompatibility, not transient error
+                # Raise immediately so caller can attempt fallback (e.g., V2 -> V3)
+                logger.warning(
+                    f"KeyError for {endpoint_class.__name__}: {e}. "
+                    f"API structure may be incompatible."
+                )
+                raise NBAApiError(f"API structure error: {e}") from e
+
             except Exception as e:
                 last_error = e
                 last_was_rate_limit = False
@@ -276,11 +285,11 @@ class NBAApiClient:
         return df
 
     def get_play_by_play(self, game_id: str) -> pd.DataFrame:
-        """Fetch play-by-play using PlayByPlayV2 with V3 fallback.
+        """Fetch play-by-play using PlayByPlayV3 with V2 fallback.
 
-        Tries PlayByPlayV2 first for compatibility, then falls back to
-        PlayByPlayV3 for historical games where V2 may not work.
-        The V3 response is normalized to V2 column format.
+        Tries PlayByPlayV3 first (current API), then falls back to
+        PlayByPlayV2 for older games if V3 fails.
+        The V3 response is normalized to V2 column format for consistency.
 
         Args:
             game_id: NBA game ID string.
@@ -292,21 +301,7 @@ class NBAApiClient:
 
         logger.debug(f"Fetching play-by-play for game {game_id}")
 
-        # Try V2 first
-        try:
-            result = self._request_with_retry(PlayByPlayV2, game_id=game_id)
-            df = result.get_data_frames()[0]
-            logger.debug(f"Retrieved {len(df)} play events for game {game_id} (V2)")
-            return df
-        except (KeyError, NBAApiError) as e:
-            # V2 may fail for historical games with KeyError: 'resultSet'
-            # or other API structure issues - fall back to V3
-            logger.warning(
-                f"PlayByPlayV2 failed for game {game_id}: {e}. "
-                f"Falling back to PlayByPlayV3."
-            )
-
-        # Fall back to V3
+        # Try V3 first (current API)
         try:
             result = self._request_with_retry(PlayByPlayV3, game_id=game_id)
             df = result.get_data_frames()[0]
@@ -315,8 +310,20 @@ class NBAApiClient:
             # Normalize V3 columns to V2 format
             df = self._normalize_pbp_v3_to_v2(df, game_id)
             return df
+        except (KeyError, NBAApiError) as e:
+            logger.warning(
+                f"PlayByPlayV3 failed for game {game_id}: {e}. "
+                f"Falling back to PlayByPlayV2."
+            )
+
+        # Fall back to V2
+        try:
+            result = self._request_with_retry(PlayByPlayV2, game_id=game_id)
+            df = result.get_data_frames()[0]
+            logger.debug(f"Retrieved {len(df)} play events for game {game_id} (V2)")
+            return df
         except Exception as e:
-            logger.error(f"PlayByPlayV3 also failed for game {game_id}: {e}")
+            logger.error(f"PlayByPlayV2 also failed for game {game_id}: {e}")
             # Return empty DataFrame instead of raising
             return pd.DataFrame()
 
@@ -505,7 +512,11 @@ class NBAApiClient:
     def get_boxscore_advanced(
         self, game_id: str
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Fetch advanced boxscore using BoxScoreAdvancedV2.
+        """Fetch advanced boxscore with V2 fallback.
+
+        Tries BoxScoreAdvancedV3 first (current API), then falls back to V2
+        for older games if V3 fails. The V3 response is normalized to V2
+        column format for consistency.
 
         Args:
             game_id: NBA game ID string.
@@ -513,27 +524,134 @@ class NBAApiClient:
         Returns:
             Tuple of (team_stats_df, player_stats_df).
         """
-        from nba_api.stats.endpoints import BoxScoreAdvancedV2
+        from nba_api.stats.endpoints import BoxScoreAdvancedV2, BoxScoreAdvancedV3
 
         logger.debug(f"Fetching advanced boxscore for game {game_id}")
 
-        result = self._request_with_retry(BoxScoreAdvancedV2, game_id=game_id)
+        # Try V3 first (current API)
+        try:
+            result = self._request_with_retry(BoxScoreAdvancedV3, game_id=game_id)
+            frames = result.get_data_frames()
+            player_df = frames[0] if len(frames) > 0 else pd.DataFrame()
+            team_df = frames[1] if len(frames) > 1 else pd.DataFrame()
 
-        frames = result.get_data_frames()
-        # Frame order: PlayerStats, TeamStats
-        player_df = frames[0] if len(frames) > 0 else pd.DataFrame()
-        team_df = frames[1] if len(frames) > 1 else pd.DataFrame()
+            # Normalize V3 to V2 column format
+            player_df = self._normalize_boxscore_advanced_v3_to_v2(
+                player_df, is_player=True
+            )
+            team_df = self._normalize_boxscore_advanced_v3_to_v2(
+                team_df, is_player=False
+            )
+            logger.debug(
+                f"Retrieved advanced stats (V3): {len(team_df)} team rows, "
+                f"{len(player_df)} player rows"
+            )
+            return team_df, player_df
+        except (KeyError, NBAApiError) as e:
+            logger.warning(
+                f"BoxScoreAdvancedV3 failed for game {game_id}: {e}. "
+                f"Falling back to BoxScoreAdvancedV2."
+            )
 
-        logger.debug(
-            f"Retrieved advanced stats: {len(team_df)} team rows, "
-            f"{len(player_df)} player rows"
-        )
-        return team_df, player_df
+        # Fall back to V2
+        try:
+            result = self._request_with_retry(BoxScoreAdvancedV2, game_id=game_id)
+            frames = result.get_data_frames()
+            # Frame order: PlayerStats, TeamStats
+            player_df = frames[0] if len(frames) > 0 else pd.DataFrame()
+            team_df = frames[1] if len(frames) > 1 else pd.DataFrame()
+            logger.debug(
+                f"Retrieved advanced stats (V2): {len(team_df)} team rows, "
+                f"{len(player_df)} player rows"
+            )
+            return team_df, player_df
+        except Exception as e:
+            logger.error(f"BoxScoreAdvancedV2 also failed for game {game_id}: {e}")
+            return pd.DataFrame(), pd.DataFrame()
+
+    def _normalize_boxscore_advanced_v3_to_v2(
+        self, df: pd.DataFrame, is_player: bool = True
+    ) -> pd.DataFrame:
+        """Normalize BoxScoreAdvancedV3 response to V2 column format.
+
+        V3 uses camelCase columns; V2 uses UPPERCASE columns.
+        This ensures downstream code works with both versions.
+
+        Args:
+            df: BoxScoreAdvancedV3 DataFrame.
+            is_player: True for player stats, False for team stats.
+
+        Returns:
+            DataFrame with V2-compatible column names.
+        """
+        if df.empty:
+            return df
+
+        # Common column mappings (V3 -> V2)
+        column_map = {
+            "gameId": "GAME_ID",
+            "teamId": "TEAM_ID",
+            "teamTricode": "TEAM_ABBREVIATION",
+            "teamCity": "TEAM_CITY",
+            "teamName": "TEAM_NAME",
+            "minutes": "MIN",
+            "estimatedOffensiveRating": "E_OFF_RATING",
+            "offensiveRating": "OFF_RATING",
+            "estimatedDefensiveRating": "E_DEF_RATING",
+            "defensiveRating": "DEF_RATING",
+            "estimatedNetRating": "E_NET_RATING",
+            "netRating": "NET_RATING",
+            "assistPercentage": "AST_PCT",
+            "assistToTurnover": "AST_TOV",
+            "assistRatio": "AST_RATIO",
+            "offensiveReboundPercentage": "OREB_PCT",
+            "defensiveReboundPercentage": "DREB_PCT",
+            "reboundPercentage": "REB_PCT",
+            "turnoverRatio": "TM_TOV_PCT",
+            "effectiveFieldGoalPercentage": "EFG_PCT",
+            "trueShootingPercentage": "TS_PCT",
+            "usagePercentage": "USG_PCT",
+            "estimatedUsagePercentage": "E_USG_PCT",
+            "estimatedPace": "E_PACE",
+            "pace": "PACE",
+            "pacePer40": "PACE_PER40",
+            "possessions": "POSS",
+            "PIE": "PIE",
+        }
+
+        # Player-specific columns
+        if is_player:
+            column_map.update(
+                {
+                    "personId": "PLAYER_ID",
+                    "position": "START_POSITION",
+                    "comment": "COMMENT",
+                }
+            )
+
+        result_df = df.copy()
+
+        # Handle player name (firstName + familyName -> PLAYER_NAME)
+        if is_player and "firstName" in df.columns and "familyName" in df.columns:
+            result_df["PLAYER_NAME"] = (
+                df["firstName"].fillna("") + " " + df["familyName"].fillna("")
+            ).str.strip()
+
+        # Rename columns that exist
+        rename_map = {k: v for k, v in column_map.items() if k in result_df.columns}
+        result_df = result_df.rename(columns=rename_map)
+
+        logger.debug(f"Normalized {len(result_df)} V3 advanced rows to V2 format")
+        return result_df
 
     def get_boxscore_traditional(
         self, game_id: str
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Fetch traditional boxscore using BoxScoreTraditionalV2.
+        """Fetch traditional boxscore with V2 fallback.
+
+        Tries BoxScoreTraditionalV3 first (current API), then falls back to V2
+        for older games if V3 fails. The V3 response is normalized to V2
+        column format for consistency.
 
         Args:
             game_id: NBA game ID string.
@@ -541,34 +659,138 @@ class NBAApiClient:
         Returns:
             Tuple of (team_stats_df, player_stats_df).
         """
-        from nba_api.stats.endpoints import BoxScoreTraditionalV2
+        from nba_api.stats.endpoints import (
+            BoxScoreTraditionalV2,
+            BoxScoreTraditionalV3,
+        )
 
         logger.debug(f"Fetching traditional boxscore for game {game_id}")
 
-        result = self._request_with_retry(BoxScoreTraditionalV2, game_id=game_id)
+        # Try V3 first (current API)
+        try:
+            result = self._request_with_retry(BoxScoreTraditionalV3, game_id=game_id)
+            frames = result.get_data_frames()
+            player_df = frames[0] if len(frames) > 0 else pd.DataFrame()
+            team_df = frames[1] if len(frames) > 1 else pd.DataFrame()
 
-        frames = result.get_data_frames()
-        # Frame order: PlayerStats, TeamStats
-        player_df = frames[0] if len(frames) > 0 else pd.DataFrame()
-        team_df = frames[1] if len(frames) > 1 else pd.DataFrame()
+            # Normalize V3 to V2 column format
+            player_df = self._normalize_boxscore_traditional_v3_to_v2(
+                player_df, is_player=True
+            )
+            team_df = self._normalize_boxscore_traditional_v3_to_v2(
+                team_df, is_player=False
+            )
+            logger.debug(
+                f"Retrieved traditional stats (V3): {len(team_df)} team rows, "
+                f"{len(player_df)} player rows"
+            )
+            return team_df, player_df
+        except (KeyError, NBAApiError) as e:
+            logger.warning(
+                f"BoxScoreTraditionalV3 failed for game {game_id}: {e}. "
+                f"Falling back to BoxScoreTraditionalV2."
+            )
 
-        logger.debug(
-            f"Retrieved traditional stats: {len(team_df)} team rows, "
-            f"{len(player_df)} player rows"
-        )
-        return team_df, player_df
+        # Fall back to V2
+        try:
+            result = self._request_with_retry(BoxScoreTraditionalV2, game_id=game_id)
+            frames = result.get_data_frames()
+            # Frame order: PlayerStats, TeamStats
+            player_df = frames[0] if len(frames) > 0 else pd.DataFrame()
+            team_df = frames[1] if len(frames) > 1 else pd.DataFrame()
+            logger.debug(
+                f"Retrieved traditional stats (V2): {len(team_df)} team rows, "
+                f"{len(player_df)} player rows"
+            )
+            return team_df, player_df
+        except Exception as e:
+            logger.error(f"BoxScoreTraditionalV2 also failed for game {game_id}: {e}")
+            return pd.DataFrame(), pd.DataFrame()
+
+    def _normalize_boxscore_traditional_v3_to_v2(
+        self, df: pd.DataFrame, is_player: bool = True
+    ) -> pd.DataFrame:
+        """Normalize BoxScoreTraditionalV3 response to V2 column format.
+
+        V3 uses camelCase columns; V2 uses UPPERCASE columns.
+        This ensures downstream code works with both versions.
+
+        Args:
+            df: BoxScoreTraditionalV3 DataFrame.
+            is_player: True for player stats, False for team stats.
+
+        Returns:
+            DataFrame with V2-compatible column names.
+        """
+        if df.empty:
+            return df
+
+        # Common column mappings (V3 -> V2)
+        column_map = {
+            "gameId": "GAME_ID",
+            "teamId": "TEAM_ID",
+            "teamTricode": "TEAM_ABBREVIATION",
+            "teamCity": "TEAM_CITY",
+            "teamName": "TEAM_NAME",
+            "minutes": "MIN",
+            "fieldGoalsMade": "FGM",
+            "fieldGoalsAttempted": "FGA",
+            "fieldGoalsPercentage": "FG_PCT",
+            "threePointersMade": "FG3M",
+            "threePointersAttempted": "FG3A",
+            "threePointersPercentage": "FG3_PCT",
+            "freeThrowsMade": "FTM",
+            "freeThrowsAttempted": "FTA",
+            "freeThrowsPercentage": "FT_PCT",
+            "reboundsOffensive": "OREB",
+            "reboundsDefensive": "DREB",
+            "reboundsTotal": "REB",
+            "assists": "AST",
+            "steals": "STL",
+            "blocks": "BLK",
+            "turnovers": "TO",
+            "foulsPersonal": "PF",
+            "points": "PTS",
+            "plusMinusPoints": "PLUS_MINUS",
+        }
+
+        # Player-specific columns
+        if is_player:
+            column_map.update(
+                {
+                    "personId": "PLAYER_ID",
+                    "position": "START_POSITION",
+                    "comment": "COMMENT",
+                }
+            )
+
+        result_df = df.copy()
+
+        # Handle player name (firstName + familyName -> PLAYER_NAME)
+        if is_player and "firstName" in df.columns and "familyName" in df.columns:
+            result_df["PLAYER_NAME"] = (
+                df["firstName"].fillna("") + " " + df["familyName"].fillna("")
+            ).str.strip()
+
+        # Rename columns that exist
+        rename_map = {k: v for k, v in column_map.items() if k in result_df.columns}
+        result_df = result_df.rename(columns=rename_map)
+
+        logger.debug(f"Normalized {len(result_df)} V3 traditional rows to V2 format")
+        return result_df
 
     def get_player_tracking(self, game_id: str) -> pd.DataFrame:
         """Fetch player tracking using BoxScorePlayerTrackV3.
 
         Note: Player tracking data is only available from ~2013-14 season.
         Uses V3 endpoint as V2 is not available in the nba_api library.
+        Response is normalized to V2-compatible column names.
 
         Args:
             game_id: NBA game ID string.
 
         Returns:
-            DataFrame with tracking metrics (distance, speed).
+            DataFrame with tracking metrics (distance, speed), normalized to V2 format.
         """
         from nba_api.stats.endpoints import BoxScorePlayerTrackV3
 
@@ -577,8 +799,74 @@ class NBAApiClient:
         result = self._request_with_retry(BoxScorePlayerTrackV3, game_id=game_id)
 
         df = result.get_data_frames()[0]
+
+        # Normalize V3 columns to V2 format for consistency
+        df = self._normalize_player_tracking_v3_to_v2(df)
+
         logger.debug(f"Retrieved tracking data for {len(df)} players")
         return df
+
+    def _normalize_player_tracking_v3_to_v2(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Normalize BoxScorePlayerTrackV3 response to V2-compatible column format.
+
+        V3 uses camelCase columns; this normalizes to UPPERCASE for consistency
+        with other boxscore data and downstream merging.
+
+        Args:
+            df: BoxScorePlayerTrackV3 DataFrame.
+
+        Returns:
+            DataFrame with V2-compatible column names.
+        """
+        if df.empty:
+            return df
+
+        # Column mappings (V3 -> V2-style)
+        column_map = {
+            "gameId": "GAME_ID",
+            "teamId": "TEAM_ID",
+            "teamTricode": "TEAM_ABBREVIATION",
+            "teamCity": "TEAM_CITY",
+            "teamName": "TEAM_NAME",
+            "personId": "PLAYER_ID",
+            "position": "START_POSITION",
+            "comment": "COMMENT",
+            "minutes": "MIN",
+            "speed": "SPD",
+            "distance": "DIST",
+            "reboundChancesOffensive": "ORBC",
+            "reboundChancesDefensive": "DRBC",
+            "reboundChancesTotal": "RBC",
+            "touches": "TCHS",
+            "secondaryAssists": "SAST",
+            "freeThrowAssists": "FTAST",
+            "passes": "PASS",
+            "contestedShots": "CFGM",
+            "contestedShots2pt": "CFGM2",
+            "contestedShots3pt": "CFGM3",
+            "deflections": "DFLS",
+            "chargesDrawn": "DREB",
+            "screenAssists": "SCREEN_ASSISTS",
+            "screenAssistPoints": "SCREEN_AST_PTS",
+            "boxOuts": "BOX_OUTS",
+            "boxOutsOffensive": "BOX_OUT_PLAYER_REBS",
+            "boxOutsDefensive": "BOX_OUT_PLAYER_TEAM_REBS",
+        }
+
+        result_df = df.copy()
+
+        # Handle player name (firstName + familyName -> PLAYER_NAME)
+        if "firstName" in df.columns and "familyName" in df.columns:
+            result_df["PLAYER_NAME"] = (
+                df["firstName"].fillna("") + " " + df["familyName"].fillna("")
+            ).str.strip()
+
+        # Rename columns that exist
+        rename_map = {k: v for k, v in column_map.items() if k in result_df.columns}
+        result_df = result_df.rename(columns=rename_map)
+
+        logger.debug(f"Normalized {len(result_df)} V3 tracking rows to V2 format")
+        return result_df
 
     def get_team_roster(self, team_id: int, season: str) -> pd.DataFrame:
         """Fetch team roster using CommonTeamRoster.

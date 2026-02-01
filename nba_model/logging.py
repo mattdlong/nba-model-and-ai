@@ -8,6 +8,12 @@ Example:
     >>> setup_logging(level="DEBUG")
     >>> logger = get_logger(__name__)
     >>> logger.info("Processing game {}", game_id)
+
+Status Tags:
+    >>> from nba_model.logging import SUCCESS, FAIL, WARN
+    >>> logger.info(f"{SUCCESS} Game 0022300001 collected")
+    >>> logger.warning(f"{WARN} Missing shots data for game 0022300001")
+    >>> logger.error(f"{FAIL} Game 0022300001 failed to collect")
 """
 
 from __future__ import annotations
@@ -17,6 +23,12 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+
+# Color-coded status tags for terminal output
+# These use ANSI escape codes that work with loguru's colorize=True
+SUCCESS = "\033[92m[SUCCESS]\033[0m"  # Green
+FAIL = "\033[91m[FAIL]\033[0m"        # Red
+WARN = "\033[93m[WARN]\033[0m"        # Yellow
 
 
 def setup_logging(
@@ -94,4 +106,4 @@ def get_logger(name: str) -> Any:
 
 
 # Export the base logger for direct use
-__all__ = ["get_logger", "logger", "setup_logging"]
+__all__ = ["get_logger", "logger", "setup_logging", "SUCCESS", "FAIL", "WARN"]

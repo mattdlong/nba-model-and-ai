@@ -521,39 +521,10 @@ class TestExceptionHierarchy:
 
 
 class TestPlayByPlayV3Fallback:
-    """Tests for PlayByPlayV2 to V3 fallback mechanism."""
+    """Tests for PlayByPlayV3 to V2 fallback mechanism."""
 
-    def test_v2_success_does_not_fallback(self, api_client: NBAApiClient) -> None:
-        """Should not call V3 when V2 succeeds."""
-        mock_v2_result = MagicMock()
-        mock_v2_result.get_data_frames.return_value = [
-            pd.DataFrame({"EVENTNUM": [1, 2], "EVENTMSGTYPE": [12, 1]})
-        ]
-
-        mock_v2_class = MagicMock(return_value=mock_v2_result)
-        mock_v2_class.__name__ = "PlayByPlayV2"
-
-        mock_v3_class = MagicMock()
-        mock_v3_class.__name__ = "PlayByPlayV3"
-
-        with patch.object(api_client, "_apply_rate_limit"):
-            with patch("nba_api.stats.endpoints.PlayByPlayV2", mock_v2_class):
-                with patch("nba_api.stats.endpoints.PlayByPlayV3", mock_v3_class):
-                    df = api_client.get_play_by_play("0022300001")
-
-        assert mock_v2_class.called
-        assert not mock_v3_class.called
-        assert "EVENTNUM" in df.columns
-
-    def test_v2_keyerror_falls_back_to_v3(self, api_client: NBAApiClient) -> None:
-        """Should fall back to V3 when V2 raises KeyError."""
-
-        def v2_fails(*args, **kwargs):
-            raise KeyError("resultSet")
-
-        mock_v2_class = MagicMock(side_effect=v2_fails)
-        mock_v2_class.__name__ = "PlayByPlayV2"
-
+    def test_v3_success_does_not_fallback(self, api_client: NBAApiClient) -> None:
+        """Should not call V2 when V3 succeeds."""
         mock_v3_result = MagicMock()
         mock_v3_result.get_data_frames.return_value = [
             pd.DataFrame({
@@ -575,37 +546,65 @@ class TestPlayByPlayV3Fallback:
         mock_v3_class = MagicMock(return_value=mock_v3_result)
         mock_v3_class.__name__ = "PlayByPlayV3"
 
+        mock_v2_class = MagicMock()
+        mock_v2_class.__name__ = "PlayByPlayV2"
+
         with patch.object(api_client, "_apply_rate_limit"):
-            with patch("nba_api.stats.endpoints.PlayByPlayV2", mock_v2_class):
-                with patch("nba_api.stats.endpoints.PlayByPlayV3", mock_v3_class):
+            with patch("nba_api.stats.endpoints.PlayByPlayV3", mock_v3_class):
+                with patch("nba_api.stats.endpoints.PlayByPlayV2", mock_v2_class):
                     df = api_client.get_play_by_play("0022300001")
 
-        assert mock_v2_class.called
         assert mock_v3_class.called
+        assert not mock_v2_class.called
         # Should have normalized V3 columns to V2 format
         assert "EVENTNUM" in df.columns
-        assert "PERIOD" in df.columns
 
-    def test_both_fail_returns_empty_dataframe(
-        self, api_client: NBAApiClient
-    ) -> None:
-        """Should return empty DataFrame when both V2 and V3 fail."""
-
-        def v2_fails(*args, **kwargs):
-            raise KeyError("resultSet")
+    def test_v3_keyerror_falls_back_to_v2(self, api_client: NBAApiClient) -> None:
+        """Should fall back to V2 when V3 raises KeyError."""
 
         def v3_fails(*args, **kwargs):
-            raise Exception("V3 also failed")
-
-        mock_v2_class = MagicMock(side_effect=v2_fails)
-        mock_v2_class.__name__ = "PlayByPlayV2"
+            raise KeyError("resultSet")
 
         mock_v3_class = MagicMock(side_effect=v3_fails)
         mock_v3_class.__name__ = "PlayByPlayV3"
 
+        mock_v2_result = MagicMock()
+        mock_v2_result.get_data_frames.return_value = [
+            pd.DataFrame({"EVENTNUM": [1, 2], "EVENTMSGTYPE": [12, 1]})
+        ]
+
+        mock_v2_class = MagicMock(return_value=mock_v2_result)
+        mock_v2_class.__name__ = "PlayByPlayV2"
+
         with patch.object(api_client, "_apply_rate_limit"):
-            with patch("nba_api.stats.endpoints.PlayByPlayV2", mock_v2_class):
-                with patch("nba_api.stats.endpoints.PlayByPlayV3", mock_v3_class):
+            with patch("nba_api.stats.endpoints.PlayByPlayV3", mock_v3_class):
+                with patch("nba_api.stats.endpoints.PlayByPlayV2", mock_v2_class):
+                    df = api_client.get_play_by_play("0022300001")
+
+        assert mock_v3_class.called
+        assert mock_v2_class.called
+        assert "EVENTNUM" in df.columns
+
+    def test_both_fail_returns_empty_dataframe(
+        self, api_client: NBAApiClient
+    ) -> None:
+        """Should return empty DataFrame when both V3 and V2 fail."""
+
+        def v3_fails(*args, **kwargs):
+            raise KeyError("resultSet")
+
+        def v2_fails(*args, **kwargs):
+            raise Exception("V2 also failed")
+
+        mock_v3_class = MagicMock(side_effect=v3_fails)
+        mock_v3_class.__name__ = "PlayByPlayV3"
+
+        mock_v2_class = MagicMock(side_effect=v2_fails)
+        mock_v2_class.__name__ = "PlayByPlayV2"
+
+        with patch.object(api_client, "_apply_rate_limit"):
+            with patch("nba_api.stats.endpoints.PlayByPlayV3", mock_v3_class):
+                with patch("nba_api.stats.endpoints.PlayByPlayV2", mock_v2_class):
                     df = api_client.get_play_by_play("0022300001")
 
         assert isinstance(df, pd.DataFrame)
@@ -724,3 +723,474 @@ class TestV3ToV2Normalization:
 
         # Score format is "AWAY - HOME"
         assert result.iloc[0]["SCORE"] == "48 - 55"
+
+
+class TestKeyErrorNoRetry:
+    """Tests for KeyError not being retried."""
+
+    def test_keyerror_raises_immediately_without_retry(
+        self, api_client: NBAApiClient
+    ) -> None:
+        """KeyError should raise NBAApiError immediately without retrying."""
+        call_count = 0
+
+        def mock_endpoint(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            raise KeyError("resultSet")
+
+        mock_class = MagicMock(side_effect=mock_endpoint)
+        mock_class.__name__ = "SomeEndpoint"
+
+        with patch.object(api_client, "_apply_rate_limit"):
+            with pytest.raises(NBAApiError, match="API structure error"):
+                api_client._request_with_retry(mock_class)
+
+        # Should only be called once - no retries
+        assert call_count == 1
+
+
+class TestBoxScoreAdvancedV3Fallback:
+    """Tests for BoxScoreAdvancedV3 to V2 fallback mechanism."""
+
+    def test_v3_success_does_not_fallback(self, api_client: NBAApiClient) -> None:
+        """Should not call V2 when V3 succeeds."""
+        mock_v3_result = MagicMock()
+        mock_v3_result.get_data_frames.return_value = [
+            pd.DataFrame({
+                "personId": [1628369],
+                "firstName": ["Jayson"],
+                "familyName": ["Tatum"],
+                "teamId": [1610612738],
+                "offensiveRating": [115.0],
+                "defensiveRating": [105.0],
+            }),
+            pd.DataFrame({
+                "teamId": [1610612738],
+                "offensiveRating": [112.0],
+                "defensiveRating": [108.0],
+            }),
+        ]
+
+        mock_v3_class = MagicMock(return_value=mock_v3_result)
+        mock_v3_class.__name__ = "BoxScoreAdvancedV3"
+
+        mock_v2_class = MagicMock()
+        mock_v2_class.__name__ = "BoxScoreAdvancedV2"
+
+        with patch.object(api_client, "_apply_rate_limit"):
+            with patch("nba_api.stats.endpoints.BoxScoreAdvancedV3", mock_v3_class):
+                with patch("nba_api.stats.endpoints.BoxScoreAdvancedV2", mock_v2_class):
+                    team_df, player_df = api_client.get_boxscore_advanced("0022300001")
+
+        assert mock_v3_class.called
+        assert not mock_v2_class.called
+        # Should have normalized V3 columns to V2 format
+        assert "OFF_RATING" in player_df.columns
+
+    def test_v3_keyerror_falls_back_to_v2(self, api_client: NBAApiClient) -> None:
+        """Should fall back to V2 when V3 raises KeyError."""
+
+        def v3_fails(*args, **kwargs):
+            raise KeyError("resultSet")
+
+        mock_v3_class = MagicMock(side_effect=v3_fails)
+        mock_v3_class.__name__ = "BoxScoreAdvancedV3"
+
+        mock_v2_result = MagicMock()
+        mock_v2_result.get_data_frames.return_value = [
+            pd.DataFrame({"PLAYER_ID": [1, 2], "OFF_RATING": [110.0, 105.0]}),
+            pd.DataFrame({"TEAM_ID": [100, 200], "OFF_RATING": [112.0, 108.0]}),
+        ]
+
+        mock_v2_class = MagicMock(return_value=mock_v2_result)
+        mock_v2_class.__name__ = "BoxScoreAdvancedV2"
+
+        with patch.object(api_client, "_apply_rate_limit"):
+            with patch("nba_api.stats.endpoints.BoxScoreAdvancedV3", mock_v3_class):
+                with patch("nba_api.stats.endpoints.BoxScoreAdvancedV2", mock_v2_class):
+                    team_df, player_df = api_client.get_boxscore_advanced("0022300001")
+
+        assert mock_v3_class.called
+        assert mock_v2_class.called
+        assert "OFF_RATING" in player_df.columns
+        assert "TEAM_ID" in team_df.columns
+
+    def test_both_fail_returns_empty_dataframes(
+        self, api_client: NBAApiClient
+    ) -> None:
+        """Should return empty DataFrames when both V3 and V2 fail."""
+
+        def v3_fails(*args, **kwargs):
+            raise KeyError("resultSet")
+
+        def v2_fails(*args, **kwargs):
+            raise Exception("V2 also failed")
+
+        mock_v3_class = MagicMock(side_effect=v3_fails)
+        mock_v3_class.__name__ = "BoxScoreAdvancedV3"
+
+        mock_v2_class = MagicMock(side_effect=v2_fails)
+        mock_v2_class.__name__ = "BoxScoreAdvancedV2"
+
+        with patch.object(api_client, "_apply_rate_limit"):
+            with patch("nba_api.stats.endpoints.BoxScoreAdvancedV3", mock_v3_class):
+                with patch("nba_api.stats.endpoints.BoxScoreAdvancedV2", mock_v2_class):
+                    team_df, player_df = api_client.get_boxscore_advanced("0022300001")
+
+        assert isinstance(team_df, pd.DataFrame)
+        assert isinstance(player_df, pd.DataFrame)
+        assert team_df.empty
+        assert player_df.empty
+
+
+class TestBoxScoreTraditionalV3Fallback:
+    """Tests for BoxScoreTraditionalV3 to V2 fallback mechanism."""
+
+    def test_v3_success_does_not_fallback(self, api_client: NBAApiClient) -> None:
+        """Should not call V2 when V3 succeeds."""
+        mock_v3_result = MagicMock()
+        mock_v3_result.get_data_frames.return_value = [
+            pd.DataFrame({
+                "personId": [1628369],
+                "firstName": ["Jayson"],
+                "familyName": ["Tatum"],
+                "teamId": [1610612738],
+                "points": [30],
+                "assists": [5],
+                "reboundsTotal": [8],
+            }),
+            pd.DataFrame({
+                "teamId": [1610612738],
+                "points": [112],
+                "assists": [25],
+            }),
+        ]
+
+        mock_v3_class = MagicMock(return_value=mock_v3_result)
+        mock_v3_class.__name__ = "BoxScoreTraditionalV3"
+
+        mock_v2_class = MagicMock()
+        mock_v2_class.__name__ = "BoxScoreTraditionalV2"
+
+        with patch.object(api_client, "_apply_rate_limit"):
+            with patch(
+                "nba_api.stats.endpoints.BoxScoreTraditionalV3", mock_v3_class
+            ):
+                with patch(
+                    "nba_api.stats.endpoints.BoxScoreTraditionalV2", mock_v2_class
+                ):
+                    team_df, player_df = api_client.get_boxscore_traditional(
+                        "0022300001"
+                    )
+
+        assert mock_v3_class.called
+        assert not mock_v2_class.called
+        # Should have normalized V3 columns to V2 format
+        assert "PTS" in player_df.columns
+        assert "AST" in player_df.columns
+        assert "REB" in player_df.columns
+
+    def test_v3_keyerror_falls_back_to_v2(self, api_client: NBAApiClient) -> None:
+        """Should fall back to V2 when V3 raises KeyError."""
+
+        def v3_fails(*args, **kwargs):
+            raise KeyError("resultSet")
+
+        mock_v3_class = MagicMock(side_effect=v3_fails)
+        mock_v3_class.__name__ = "BoxScoreTraditionalV3"
+
+        mock_v2_result = MagicMock()
+        mock_v2_result.get_data_frames.return_value = [
+            pd.DataFrame({"PLAYER_ID": [1, 2], "PTS": [25, 18]}),
+            pd.DataFrame({"TEAM_ID": [100, 200], "PTS": [110, 105]}),
+        ]
+
+        mock_v2_class = MagicMock(return_value=mock_v2_result)
+        mock_v2_class.__name__ = "BoxScoreTraditionalV2"
+
+        with patch.object(api_client, "_apply_rate_limit"):
+            with patch(
+                "nba_api.stats.endpoints.BoxScoreTraditionalV3", mock_v3_class
+            ):
+                with patch(
+                    "nba_api.stats.endpoints.BoxScoreTraditionalV2", mock_v2_class
+                ):
+                    team_df, player_df = api_client.get_boxscore_traditional(
+                        "0022300001"
+                    )
+
+        assert mock_v3_class.called
+        assert mock_v2_class.called
+        assert "PTS" in player_df.columns
+        assert "TEAM_ID" in team_df.columns
+
+    def test_both_fail_returns_empty_dataframes(
+        self, api_client: NBAApiClient
+    ) -> None:
+        """Should return empty DataFrames when both V3 and V2 fail."""
+
+        def v3_fails(*args, **kwargs):
+            raise KeyError("resultSet")
+
+        def v2_fails(*args, **kwargs):
+            raise Exception("V2 also failed")
+
+        mock_v3_class = MagicMock(side_effect=v3_fails)
+        mock_v3_class.__name__ = "BoxScoreTraditionalV3"
+
+        mock_v2_class = MagicMock(side_effect=v2_fails)
+        mock_v2_class.__name__ = "BoxScoreTraditionalV2"
+
+        with patch.object(api_client, "_apply_rate_limit"):
+            with patch(
+                "nba_api.stats.endpoints.BoxScoreTraditionalV3", mock_v3_class
+            ):
+                with patch(
+                    "nba_api.stats.endpoints.BoxScoreTraditionalV2", mock_v2_class
+                ):
+                    team_df, player_df = api_client.get_boxscore_traditional(
+                        "0022300001"
+                    )
+
+        assert isinstance(team_df, pd.DataFrame)
+        assert isinstance(player_df, pd.DataFrame)
+        assert team_df.empty
+        assert player_df.empty
+
+
+class TestBoxScoreV3Normalization:
+    """Tests for V3 to V2 column normalization for boxscore endpoints."""
+
+    def test_normalize_advanced_player_stats(self, api_client: NBAApiClient) -> None:
+        """Should normalize V3 advanced player stats to V2 column format."""
+        v3_df = pd.DataFrame({
+            "personId": [1628369, 1629029],
+            "firstName": ["Jayson", "Jaylen"],
+            "familyName": ["Tatum", "Brown"],
+            "teamId": [1610612738, 1610612738],
+            "offensiveRating": [115.5, 112.3],
+            "defensiveRating": [105.2, 108.1],
+            "netRating": [10.3, 4.2],
+            "usagePercentage": [30.5, 25.2],
+            "pace": [98.5, 98.5],
+        })
+
+        result = api_client._normalize_boxscore_advanced_v3_to_v2(v3_df, is_player=True)
+
+        # Check column mapping
+        assert "PLAYER_ID" in result.columns
+        assert "TEAM_ID" in result.columns
+        assert "OFF_RATING" in result.columns
+        assert "DEF_RATING" in result.columns
+        assert "NET_RATING" in result.columns
+        assert "USG_PCT" in result.columns
+        assert "PACE" in result.columns
+        assert "PLAYER_NAME" in result.columns
+
+        # Check values
+        assert result.iloc[0]["PLAYER_ID"] == 1628369
+        assert result.iloc[0]["PLAYER_NAME"] == "Jayson Tatum"
+        assert result.iloc[0]["OFF_RATING"] == 115.5
+
+    def test_normalize_advanced_team_stats(self, api_client: NBAApiClient) -> None:
+        """Should normalize V3 advanced team stats to V2 column format."""
+        v3_df = pd.DataFrame({
+            "teamId": [1610612738, 1610612751],
+            "teamTricode": ["BOS", "BKN"],
+            "offensiveRating": [112.5, 108.3],
+            "defensiveRating": [104.2, 110.1],
+            "pace": [98.5, 99.2],
+        })
+
+        result = api_client._normalize_boxscore_advanced_v3_to_v2(
+            v3_df, is_player=False
+        )
+
+        # Check column mapping
+        assert "TEAM_ID" in result.columns
+        assert "TEAM_ABBREVIATION" in result.columns
+        assert "OFF_RATING" in result.columns
+        assert "DEF_RATING" in result.columns
+        assert "PACE" in result.columns
+
+        # Player-specific columns should not be present
+        assert "PLAYER_ID" not in result.columns
+        assert "PLAYER_NAME" not in result.columns
+
+    def test_normalize_traditional_player_stats(
+        self, api_client: NBAApiClient
+    ) -> None:
+        """Should normalize V3 traditional player stats to V2 column format."""
+        v3_df = pd.DataFrame({
+            "personId": [1628369],
+            "firstName": ["Jayson"],
+            "familyName": ["Tatum"],
+            "teamId": [1610612738],
+            "points": [30],
+            "assists": [5],
+            "reboundsTotal": [8],
+            "reboundsOffensive": [1],
+            "reboundsDefensive": [7],
+            "fieldGoalsMade": [10],
+            "fieldGoalsAttempted": [20],
+            "fieldGoalsPercentage": [0.500],
+            "threePointersMade": [3],
+            "threePointersAttempted": [8],
+            "steals": [2],
+            "blocks": [1],
+            "turnovers": [3],
+        })
+
+        result = api_client._normalize_boxscore_traditional_v3_to_v2(
+            v3_df, is_player=True
+        )
+
+        # Check column mapping
+        assert "PLAYER_ID" in result.columns
+        assert "PLAYER_NAME" in result.columns
+        assert "PTS" in result.columns
+        assert "AST" in result.columns
+        assert "REB" in result.columns
+        assert "OREB" in result.columns
+        assert "DREB" in result.columns
+        assert "FGM" in result.columns
+        assert "FGA" in result.columns
+        assert "FG_PCT" in result.columns
+        assert "FG3M" in result.columns
+        assert "FG3A" in result.columns
+        assert "STL" in result.columns
+        assert "BLK" in result.columns
+        assert "TO" in result.columns
+
+        # Check values
+        assert result.iloc[0]["PLAYER_NAME"] == "Jayson Tatum"
+        assert result.iloc[0]["PTS"] == 30
+        assert result.iloc[0]["REB"] == 8
+
+    def test_normalize_traditional_team_stats(self, api_client: NBAApiClient) -> None:
+        """Should normalize V3 traditional team stats to V2 column format."""
+        v3_df = pd.DataFrame({
+            "teamId": [1610612738],
+            "teamTricode": ["BOS"],
+            "points": [112],
+            "assists": [25],
+            "reboundsTotal": [45],
+            "fieldGoalsMade": [42],
+            "fieldGoalsAttempted": [88],
+        })
+
+        result = api_client._normalize_boxscore_traditional_v3_to_v2(
+            v3_df, is_player=False
+        )
+
+        # Check column mapping
+        assert "TEAM_ID" in result.columns
+        assert "TEAM_ABBREVIATION" in result.columns
+        assert "PTS" in result.columns
+        assert "AST" in result.columns
+        assert "REB" in result.columns
+        assert "FGM" in result.columns
+        assert "FGA" in result.columns
+
+        # Player-specific columns should not be present
+        assert "PLAYER_ID" not in result.columns
+        assert "PLAYER_NAME" not in result.columns
+
+    def test_normalize_empty_dataframe(self, api_client: NBAApiClient) -> None:
+        """Should handle empty DataFrames gracefully."""
+        empty_df = pd.DataFrame()
+
+        adv_result = api_client._normalize_boxscore_advanced_v3_to_v2(empty_df)
+        trad_result = api_client._normalize_boxscore_traditional_v3_to_v2(empty_df)
+
+        assert adv_result.empty
+        assert trad_result.empty
+
+
+class TestPlayerTrackingV3Normalization:
+    """Tests for player tracking V3 to V2 normalization."""
+
+    def test_normalize_player_tracking_stats(self, api_client: NBAApiClient) -> None:
+        """Should normalize V3 player tracking stats to V2 column format."""
+        v3_df = pd.DataFrame({
+            "gameId": ["0022300001"],
+            "teamId": [1610612738],
+            "teamTricode": ["BOS"],
+            "personId": [1628369],
+            "firstName": ["Jayson"],
+            "familyName": ["Tatum"],
+            "minutes": ["36:25"],
+            "speed": [4.5],
+            "distance": [2.8],
+            "reboundChancesOffensive": [3],
+            "reboundChancesDefensive": [5],
+            "reboundChancesTotal": [8],
+            "touches": [75],
+            "passes": [45],
+        })
+
+        result = api_client._normalize_player_tracking_v3_to_v2(v3_df)
+
+        # Check column mapping
+        assert "GAME_ID" in result.columns
+        assert "TEAM_ID" in result.columns
+        assert "TEAM_ABBREVIATION" in result.columns
+        assert "PLAYER_ID" in result.columns
+        assert "PLAYER_NAME" in result.columns
+        assert "MIN" in result.columns
+        assert "SPD" in result.columns
+        assert "DIST" in result.columns
+        assert "ORBC" in result.columns
+        assert "DRBC" in result.columns
+        assert "RBC" in result.columns
+        assert "TCHS" in result.columns
+        assert "PASS" in result.columns
+
+        # Check values
+        assert result.iloc[0]["PLAYER_ID"] == 1628369
+        assert result.iloc[0]["PLAYER_NAME"] == "Jayson Tatum"
+        assert result.iloc[0]["TEAM_ID"] == 1610612738
+        assert result.iloc[0]["SPD"] == 4.5
+        assert result.iloc[0]["DIST"] == 2.8
+
+    def test_normalize_empty_tracking_dataframe(
+        self, api_client: NBAApiClient
+    ) -> None:
+        """Should handle empty tracking DataFrame gracefully."""
+        empty_df = pd.DataFrame()
+        result = api_client._normalize_player_tracking_v3_to_v2(empty_df)
+        assert result.empty
+
+    def test_get_player_tracking_returns_normalized(
+        self, api_client: NBAApiClient
+    ) -> None:
+        """get_player_tracking should return normalized V2-format columns."""
+        mock_result = MagicMock()
+        mock_result.get_data_frames.return_value = [
+            pd.DataFrame({
+                "gameId": ["0022300001"],
+                "teamId": [1610612738],
+                "personId": [1628369],
+                "firstName": ["Jayson"],
+                "familyName": ["Tatum"],
+                "speed": [4.5],
+                "distance": [2.8],
+            })
+        ]
+
+        mock_class = MagicMock(return_value=mock_result)
+        mock_class.__name__ = "BoxScorePlayerTrackV3"
+
+        with patch.object(api_client, "_apply_rate_limit"):
+            with patch(
+                "nba_api.stats.endpoints.BoxScorePlayerTrackV3", mock_class
+            ):
+                df = api_client.get_player_tracking("0022300001")
+
+        # Should have normalized column names
+        assert "PLAYER_ID" in df.columns
+        assert "TEAM_ID" in df.columns
+        assert "PLAYER_NAME" in df.columns
+        assert "SPD" in df.columns
+        assert "DIST" in df.columns

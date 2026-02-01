@@ -24,6 +24,8 @@ from datetime import date, datetime
 from enum import Enum
 from typing import TYPE_CHECKING
 
+from nba_model.logging import FAIL, SUCCESS, WARN
+
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
@@ -532,6 +534,7 @@ class CollectionPipeline:
         """Collect all data for a batch of games.
 
         Collects: plays, shots, box scores, stints.
+        Logs per-game status with color-coded tags.
 
         Args:
             game_ids: List of game IDs.
@@ -544,6 +547,15 @@ class CollectionPipeline:
         batch = BatchResult(game_ids=game_ids.copy())
 
         for game_id in game_ids:
+            # Track what was collected for this game
+            game_plays = []
+            game_shots = []
+            game_stats_list = []
+            game_player_stats = []
+            game_stints = []
+            warnings = []
+            has_error = False
+
             try:
                 # Get game info for team IDs
                 game = (
@@ -551,42 +563,66 @@ class CollectionPipeline:
                 )
 
                 # Collect play-by-play
-                plays = self.pbp_collector.collect_game(game_id)
-                batch.plays.extend(plays)
+                game_plays = self.pbp_collector.collect_game(game_id)
+                batch.plays.extend(game_plays)
 
                 # Collect shots
                 try:
-                    shots = self.shots_collector.collect_game(game_id)
-                    batch.shots.extend(shots)
+                    game_shots = self.shots_collector.collect_game(game_id)
+                    batch.shots.extend(game_shots)
                 except Exception as e:
-                    self.logger.warning(f"Error collecting shots for {game_id}: {e}")
+                    warnings.append(f"shots: {e}")
 
                 # Collect box scores
                 try:
-                    game_stats, player_stats = self.boxscore_collector.collect_game(
-                        game_id
+                    game_stats_list, game_player_stats = (
+                        self.boxscore_collector.collect_game(game_id)
                     )
-                    batch.game_stats.extend(game_stats)
-                    batch.player_game_stats.extend(player_stats)
+                    batch.game_stats.extend(game_stats_list)
+                    batch.player_game_stats.extend(game_player_stats)
                 except Exception as e:
-                    self.logger.warning(f"Error collecting boxscores for {game_id}: {e}")
+                    warnings.append(f"boxscores: {e}")
 
                 # Derive stints from plays
-                if plays and game:
+                if game_plays and game:
                     try:
-                        stints = self.stint_deriver.derive_stints(
-                            plays,
+                        game_stints = self.stint_deriver.derive_stints(
+                            game_plays,
                             game_id,
                             home_team_id=game.home_team_id,
                             away_team_id=game.away_team_id,
                         )
-                        batch.stints.extend(stints)
+                        batch.stints.extend(game_stints)
                     except Exception as e:
-                        self.logger.warning(f"Error deriving stints for {game_id}: {e}")
+                        warnings.append(f"stints: {e}")
 
             except Exception as e:
-                self.logger.error(f"Error processing game {game_id}: {e}")
+                has_error = True
                 batch.errors.append((game_id, str(e)))
+                self.logger.error(
+                    f"{FAIL} Game {game_id}: {e}"
+                )
+                continue
+
+            # Log per-game status with color-coded tags
+            if has_error:
+                # Already logged above
+                pass
+            elif warnings:
+                # Partial success - some data missing
+                self.logger.warning(
+                    f"{WARN} Game {game_id}: "
+                    f"{len(game_plays)} plays, {len(game_shots)} shots, "
+                    f"{len(game_player_stats)} player stats, {len(game_stints)} stints "
+                    f"(missing: {', '.join(warnings)})"
+                )
+            else:
+                # Full success
+                self.logger.info(
+                    f"{SUCCESS} Game {game_id}: "
+                    f"{len(game_plays)} plays, {len(game_shots)} shots, "
+                    f"{len(game_player_stats)} player stats, {len(game_stints)} stints"
+                )
 
         return batch
 
@@ -606,11 +642,14 @@ class CollectionPipeline:
             player_game_stats=batch.player_game_stats,
         )
 
-    def _commit_batch(self, batch: BatchResult) -> None:
+    def _commit_batch(self, batch: BatchResult) -> bool:
         """Commit batch to database.
 
         Args:
             batch: BatchResult to commit.
+
+        Returns:
+            True if commit succeeded, False otherwise.
         """
         try:
             # Add plays
@@ -635,13 +674,21 @@ class CollectionPipeline:
 
             self.session.commit()
 
-            self.logger.debug(
-                f"Committed batch: {len(batch.plays)} plays, "
-                f"{len(batch.shots)} shots, {len(batch.stints)} stints"
+            self.logger.info(
+                f"{SUCCESS} Batch persisted: "
+                f"{len(batch.plays)} plays, {len(batch.shots)} shots, "
+                f"{len(batch.game_stats)} game stats, "
+                f"{len(batch.player_game_stats)} player stats, "
+                f"{len(batch.stints)} stints"
             )
+            return True
 
         except Exception as e:
-            self.logger.error(f"Error committing batch: {e}")
+            self.logger.error(
+                f"{FAIL} Batch persistence failed: {e}"
+            )
+            self.session.rollback()
+            return False
             self.session.rollback()
             raise
 
