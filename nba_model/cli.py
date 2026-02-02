@@ -169,7 +169,8 @@ def data_collect(
 
     # Determine seasons
     if full:
-        seasons_to_collect = ["2019-20", "2020-21", "2021-22", "2022-23", "2023-24"]
+        # Exclude COVID-impacted seasons (2019-20, 2020-21)
+        seasons_to_collect = ["2016-17", "2017-18", "2018-19", "2021-22", "2022-23", "2023-24"]
     elif seasons:
         seasons_to_collect = seasons
     else:
@@ -338,6 +339,221 @@ def data_repair(
 
         result = pipeline.repair_games(game_ids)
         _display_pipeline_result(result)
+
+
+@data_app.command("quality")
+def data_quality(
+    season: Annotated[
+        str | None,
+        typer.Option(
+            "--season",
+            "-s",
+            help="Season to review (e.g., 2023-24). Omit for all seasons.",
+        ),
+    ] = None,
+    output_format: Annotated[
+        str,
+        typer.Option(
+            "--format",
+            "-f",
+            help="Output format: table, json, or markdown",
+        ),
+    ] = "table",
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose",
+            "-v",
+            help="Show all issues (not just summary)",
+        ),
+    ] = False,
+) -> None:
+    """Run comprehensive data quality review.
+
+    Checks completeness, consistency, validity, and referential integrity
+    across the database. Produces a report with issues and games needing repair.
+    """
+    import json as json_lib
+
+    from nba_model.data import init_db, session_scope
+    from nba_model.data.quality import DataQualityReviewer
+
+    settings = get_settings()
+
+    # Check if database exists
+    if not settings.db_path_obj.exists():
+        console.print(
+            "[red]Error: Database not found. Run 'data collect' first.[/red]"
+        )
+        raise typer.Exit(1)
+
+    init_db()
+
+    console.print(
+        Panel(
+            f"[bold]Season:[/bold] {season or 'All seasons'}\n"
+            f"[bold]Format:[/bold] {output_format}",
+            title="Data Quality Review",
+        )
+    )
+
+    with session_scope() as session:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            progress.add_task("Running quality review...", total=None)
+            reviewer = DataQualityReviewer()
+            report = reviewer.run_full_review(session, season=season)
+
+    # Display results based on format
+    if output_format == "json":
+        _display_quality_report_json(report)
+    elif output_format == "markdown":
+        _display_quality_report_markdown(report, verbose)
+    else:  # table
+        _display_quality_report_table(report, verbose)
+
+
+def _display_quality_report_table(report, verbose: bool = False) -> None:
+    """Display quality report in table format."""
+    console.print(f"\n[bold]NBA Database Quality Report[/bold]")
+    console.print(f"Generated: {report.generated_at.strftime('%Y-%m-%d %H:%M:%S')}")
+    if report.season_filter:
+        console.print(f"Season: {report.season_filter}")
+    console.print()
+
+    # Summary table
+    summary_table = Table(title="Summary by Dimension")
+    summary_table.add_column("Dimension", style="cyan")
+    summary_table.add_column("Errors", justify="right", style="red")
+    summary_table.add_column("Warnings", justify="right", style="yellow")
+    summary_table.add_column("Info", justify="right", style="blue")
+
+    for dimension in ["completeness", "consistency", "validity", "referential"]:
+        errors = report.summary.get(f"{dimension}_error", 0)
+        warnings = report.summary.get(f"{dimension}_warning", 0)
+        info = report.summary.get(f"{dimension}_info", 0)
+        summary_table.add_row(
+            dimension.capitalize(),
+            str(errors),
+            str(warnings),
+            str(info),
+        )
+
+    # Add totals row
+    summary_table.add_row(
+        "[bold]TOTAL[/bold]",
+        f"[bold]{report.error_count}[/bold]",
+        f"[bold]{report.warning_count}[/bold]",
+        f"[bold]{report.info_count}[/bold]",
+    )
+
+    console.print(summary_table)
+
+    # Games needing repair
+    if report.games_needing_repair:
+        console.print(f"\n[bold red]Games Needing Repair ({len(report.games_needing_repair)}):[/bold red]")
+        for game_id in report.games_needing_repair[:20]:
+            # Find the error for this game
+            game_errors = [i for i in report.issues if i.entity_id == game_id and i.severity == "error"]
+            if game_errors:
+                console.print(f"  - {game_id}: {game_errors[0].message}")
+            else:
+                console.print(f"  - {game_id}")
+        if len(report.games_needing_repair) > 20:
+            console.print(f"  ... and {len(report.games_needing_repair) - 20} more")
+
+    # Verbose output - show all issues
+    if verbose and report.issues:
+        console.print(f"\n[bold]All Issues ({len(report.issues)}):[/bold]")
+        for issue in report.issues[:100]:
+            severity_color = {"error": "red", "warning": "yellow", "info": "blue"}.get(
+                issue.severity, "white"
+            )
+            entity_str = f" ({issue.entity_id})" if issue.entity_id else ""
+            console.print(
+                f"  [{severity_color}]{issue.severity.upper()}[/{severity_color}] "
+                f"[{issue.dimension}] {issue.entity}{entity_str}: {issue.message}"
+            )
+        if len(report.issues) > 100:
+            console.print(f"  ... and {len(report.issues) - 100} more")
+
+
+def _display_quality_report_json(report) -> None:
+    """Display quality report in JSON format."""
+    import json as json_lib
+
+    output = {
+        "generated_at": report.generated_at.isoformat(),
+        "season_filter": report.season_filter,
+        "summary": {
+            "total_errors": report.error_count,
+            "total_warnings": report.warning_count,
+            "total_info": report.info_count,
+            "by_dimension": report.summary,
+        },
+        "games_needing_repair": report.games_needing_repair,
+        "issues": [
+            {
+                "severity": i.severity,
+                "dimension": i.dimension,
+                "entity": i.entity,
+                "entity_id": i.entity_id,
+                "message": i.message,
+            }
+            for i in report.issues
+        ],
+    }
+    console.print(json_lib.dumps(output, indent=2))
+
+
+def _display_quality_report_markdown(report, verbose: bool = False) -> None:
+    """Display quality report in markdown format."""
+    console.print("# NBA Database Quality Report")
+    console.print(f"\nGenerated: {report.generated_at.strftime('%Y-%m-%d %H:%M:%S')}")
+    if report.season_filter:
+        console.print(f"Season: {report.season_filter}")
+    console.print()
+
+    console.print("## Summary")
+    console.print()
+    console.print("| Dimension | Errors | Warnings | Info |")
+    console.print("|-----------|--------|----------|------|")
+
+    for dimension in ["completeness", "consistency", "validity", "referential"]:
+        errors = report.summary.get(f"{dimension}_error", 0)
+        warnings = report.summary.get(f"{dimension}_warning", 0)
+        info = report.summary.get(f"{dimension}_info", 0)
+        console.print(f"| {dimension.capitalize()} | {errors} | {warnings} | {info} |")
+
+    console.print(f"| **TOTAL** | **{report.error_count}** | **{report.warning_count}** | **{report.info_count}** |")
+    console.print()
+
+    if report.games_needing_repair:
+        console.print(f"## Games Needing Repair ({len(report.games_needing_repair)})")
+        console.print()
+        for game_id in report.games_needing_repair[:20]:
+            game_errors = [i for i in report.issues if i.entity_id == game_id and i.severity == "error"]
+            if game_errors:
+                console.print(f"- `{game_id}`: {game_errors[0].message}")
+            else:
+                console.print(f"- `{game_id}`")
+        if len(report.games_needing_repair) > 20:
+            console.print(f"- ... and {len(report.games_needing_repair) - 20} more")
+        console.print()
+
+    if verbose and report.issues:
+        console.print(f"## All Issues ({len(report.issues)})")
+        console.print()
+        for issue in report.issues[:100]:
+            entity_str = f" ({issue.entity_id})" if issue.entity_id else ""
+            console.print(
+                f"- **{issue.severity.upper()}** [{issue.dimension}] {issue.entity}{entity_str}: {issue.message}"
+            )
+        if len(report.issues) > 100:
+            console.print(f"- ... and {len(report.issues) - 100} more")
 
 
 def _get_database_stats(session) -> list[tuple[str, int, str | None]]:

@@ -36,7 +36,7 @@ from nba_model.data.checkpoint import Checkpoint, CheckpointManager
 from nba_model.data.collectors import (
     BaseCollector,
     BoxScoreCollector,
-    EVENT_TYPES,
+    V3_ACTION_TYPES,
     GamesCollector,
     PlayByPlayCollector,
     PlayersCollector,
@@ -53,12 +53,13 @@ from nba_model.data.db import (
 )
 from nba_model.data.models import (
     Game,
-    GameStats,
+    GameStats,  # Alias for TeamBoxScore (backward compatibility)
     LineupSpacing,
     Odds,
     Play,
     Player,
-    PlayerGameStats,
+    PlayerBoxScore,
+    PlayerGameStats,  # Alias for PlayerBoxScore (backward compatibility)
     PlayerRAPM,
     PlayerSeason,
     Season,
@@ -66,6 +67,7 @@ from nba_model.data.models import (
     Shot,
     Stint,
     Team,
+    TeamBoxScore,
 )
 from nba_model.data.pipelines import (
     BatchResult,
@@ -74,6 +76,7 @@ from nba_model.data.pipelines import (
     PipelineStatus,
 )
 from nba_model.data.schema import Base, TimestampMixin
+from nba_model.data.quality import DataQualityReviewer, QualityIssue, QualityReport
 from nba_model.data.stints import LineupChange, StintDeriver
 from nba_model.data.validation import DataValidator, ValidationResult
 
@@ -87,7 +90,7 @@ __all__ = [
     # Collectors
     "BaseCollector",
     "BoxScoreCollector",
-    "EVENT_TYPES",
+    "V3_ACTION_TYPES",
     "GamesCollector",
     "PlayByPlayCollector",
     "PlayersCollector",
@@ -104,6 +107,10 @@ __all__ = [
     # Stint derivation
     "LineupChange",
     "StintDeriver",
+    # Quality review
+    "DataQualityReviewer",
+    "QualityIssue",
+    "QualityReport",
     # Validation
     "DataValidator",
     "ValidationResult",
@@ -124,8 +131,10 @@ __all__ = [
     "PlayerSeason",
     # Game models
     "Game",
-    "GameStats",
-    "PlayerGameStats",
+    "TeamBoxScore",
+    "PlayerBoxScore",
+    "GameStats",  # Alias for TeamBoxScore (backward compatibility)
+    "PlayerGameStats",  # Alias for PlayerBoxScore (backward compatibility)
     # Play-by-play models
     "Play",
     "Shot",
